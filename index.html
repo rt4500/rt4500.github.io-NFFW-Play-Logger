@@ -208,6 +208,7 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
   <div class="gname" id="hGame">Game</div>
   <div class="sit" id="hSit"></div>
   <button class="iconbtn" id="btnQuickExport" title="Export CSV backup">⬇︎</button>
+  <button class="iconbtn" id="btnFull" title="Fullscreen">⛶</button>
   <button class="iconbtn" id="btnWake" title="Keep screen awake" style="display:none">🔆</button>
   <button class="iconbtn" id="btnTheme" title="Day / night">☀️</button>
 </header>
@@ -1455,6 +1456,22 @@ $('btnTheme').addEventListener('click',()=>{
   db.settings.theme = db.settings.theme==='night'?'day':'night';
   save(); applyTheme();
 });
+/* fullscreen toggle */
+(function(){
+  const root=document.documentElement, btn=$('btnFull');
+  const req=root.requestFullscreen||root.webkitRequestFullscreen;
+  if(!req){ btn.style.display='none'; return; }
+  const active=()=>document.fullscreenElement||document.webkitFullscreenElement;
+  function paint(){ btn.textContent=active()?'🡖':'⛶'; btn.title=active()?'Exit fullscreen':'Fullscreen'; }
+  btn.addEventListener('click',()=>{
+    buzz(10);
+    if(!active()){ (root.requestFullscreen||root.webkitRequestFullscreen).call(root).catch(()=>{}); }
+    else { (document.exitFullscreen||document.webkitExitFullscreen||function(){}).call(document); }
+  });
+  document.addEventListener('fullscreenchange',paint);
+  document.addEventListener('webkitfullscreenchange',paint);
+  paint();
+})();
 let wakeLock=null;
 async function reqWake(){
   try{ wakeLock=await navigator.wakeLock.request('screen'); $('btnWake').style.opacity=1; }
