@@ -185,6 +185,21 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
 .lockcard input{margin:12px 0 6px; text-align:center; font-size:1.1rem;}
 .lockcard .btn{margin-top:8px;}
 .lockerr{color:var(--bad); font-weight:700; min-height:20px; font-size:.9rem;}
+.startcard{text-align:center; padding:24px 18px; margin-top:16px;}
+.startcard .startlogo{font-size:2.6rem;}
+.startcard h2{margin:6px 0 10px;}
+.startcard label.f{text-align:left;}
+.startcard input{text-align:center; font-size:1.05rem;}
+.startsummary{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:12px; margin:4px 0 14px; text-align:left;}
+.startsummary .big{font-size:1.15rem; font-weight:900;}
+.gamebar{display:flex; align-items:center; gap:10px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:8px 12px; margin:10px 0; box-shadow:var(--shadow);}
+.gamebar .gbinfo{flex:1; min-width:0;}
+.gamebar .gbname{font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.gamebar .gbsub{font-size:.8rem; color:var(--ink2);}
+.gamebar .gbend{flex:none; background:var(--card); color:var(--bad); border:2px solid var(--bad); border-radius:10px; font-weight:800; font-size:.85rem; padding:8px 12px; min-height:40px;}
+.stalebanner{display:none; align-items:center; gap:8px; background:var(--warn); color:#fff; border-radius:12px; padding:8px 12px; margin:8px 0; font-weight:700; font-size:.9rem;}
+.stalebanner.show{display:flex;}
+.stalebanner button{margin-left:auto; background:#fff; color:var(--warn); border:none; border-radius:9px; font-weight:800; padding:7px 12px; min-height:38px; flex:none;}
 .chip .star{margin-right:5px; opacity:.9;}
 .combo{font-size:.8rem; color:var(--ink2);}
 .sboard{padding:10px 12px;}
@@ -218,6 +233,22 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
 
 <!-- ============ LOG ============ -->
 <section class="screen active" id="scr-log">
+  <div class="card startcard" id="startCard" style="display:none">
+    <div class="startlogo">🏈</div>
+    <h2 id="startTitle">Start a game</h2>
+    <div id="startSummary"></div>
+    <label class="f">OPPONENT (optional)</label>
+    <input type="text" id="startOpp" placeholder="e.g. Bern Grizzlies" autocomplete="off">
+    <button class="btn" id="btnStartGame" style="margin-top:10px">▶ Start game</button>
+    <button class="btn sec" id="btnResumeGame" style="margin-top:8px; display:none">Resume last game</button>
+  </div>
+
+  <div id="logUI">
+  <div class="gamebar" id="gameBar">
+    <div class="gbinfo"><div class="gbname" id="gbName">Game</div><div class="gbsub" id="gbSub"></div></div>
+    <button class="gbend" id="btnEndGame">⏹ End game</button>
+  </div>
+  <div class="stalebanner" id="staleBanner">This game was started earlier — <b>start a new one?</b> <button id="btnStaleNew">New game</button></div>
   <div class="xpbanner" id="xpBanner">🏈 TD! Logging the extra point — pick 1P or 2P below.</div>
   <div class="nudge" id="exportNudge"><span id="nudgeText"></span><button id="btnNudgeExport">Export now</button><button id="btnNudgeDismiss" class="dismiss">✕</button></div>
   <button class="repeatbtn" id="btnRepeat">↻ Repeat last play call</button>
@@ -313,6 +344,7 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
       <div class="chips" id="ptwChips"></div>
     </div>
   </details>
+  </div><!-- /logUI -->
 </section>
 
 <!-- ============ PLAYS ============ -->
@@ -334,7 +366,7 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
     <label class="f">CURRENT GAME</label>
     <select id="gameSelect"></select>
     <div class="grid2" style="margin-top:8px">
-      <button class="btn sec" id="btnNewGame">＋ New game</button>
+      <button class="btn sec" id="btnNewGame">＋ Start new game</button>
       <button class="btn sec" id="btnRenameGame">Rename</button>
     </div>
     <div class="grid2">
@@ -527,12 +559,35 @@ function save(){
 }
 function uid(){ return 'g'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 function game(){ return db.games.find(g=>g.id===db.currentGameId); }
-function ensureGame(){
-  if(!game()){
-    const d=new Date(), ds=d.toISOString().slice(0,10);
-    const g={id:uid(), name:'Game '+ds, date:ds, plays:[], series:1, lastExport:0, usScore:0, oppScore:0, opponent:''};
-    db.games.push(g); db.currentGameId=g.id; save();
-  }
+// the game currently being logged into (null if none is in progress)
+function activeGame(){ const g=game(); return (g && g.status!=='ended') ? g : null; }
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function startGame(){
+  const opp=($('startOpp')?$('startOpp').value.trim():'');
+  const ds=todayStr();
+  const name = opp ? (opp+' · '+ds) : ('Game '+ds);
+  const g={id:uid(), name, date:ds, opponent:opp, plays:[], series:1, lastExport:0, usScore:0, oppScore:0, status:'active'};
+  db.games.push(g); db.currentGameId=g.id;
+  if($('startOpp')) $('startOpp').value='';
+  freshCur(); save(); renderLog(); toast('Game started');
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function endGame(){
+  const g=activeGame(); if(!g){ return; }
+  if(!confirm('End this game? You won’t be able to add more plays to it.')) return;
+  g.status='ended'; save(); renderLog();
+  toast('Game ended');
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function resumeGame(){
+  const g=game(); if(!g) return;
+  g.status='active'; save(); freshCur(); renderLog(); toast('Game resumed');
+}
+function newGameFlow(){
+  // end the current active game (with confirm) then show the start screen
+  const g=activeGame();
+  if(g){ if(!confirm('End the current game and start a new one?')) return; g.status='ended'; save(); }
+  renderLog();
 }
 
 /* Result definitions: label -> {result, resultW, type} */
@@ -613,14 +668,50 @@ function autoEfficient(){
   return false;
 }
 function renderHeader(){
-  const g=game();
-  $('hGame').textContent = g? g.name : '—';
-  const n = g? g.plays.filter(p=>!p._divider).length : 0;
+  const g=activeGame();
+  if(!g){ $('hGame').textContent='SAF Play Logger'; $('hSit').textContent='No game in progress'; return; }
+  $('hGame').textContent = g.name;
+  const n = g.plays.filter(p=>!p._divider).length;
   let dnTxt = cur.dn===0 ? ' · XP' : (cur.dn==null ? '' : ' · '+cur.dn+' & '+cur.dist);
-  $('hSit').textContent = 'Play '+(n+1)+' · S'+(g?g.series:1)+dnTxt;
+  $('hSit').textContent = 'Play '+(n+1)+' · S'+g.series+dnTxt;
+}
+function renderStartCard(){
+  const g=game();  // may be an ended game we just finished
+  const sum=$('startSummary'), resumeBtn=$('btnResumeGame');
+  if(g && g.status==='ended'){
+    $('startTitle').textContent='Start the next game';
+    const np=g.plays.filter(p=>!p._divider).length;
+    sum.innerHTML='<div class="startsummary">Last game: <b>'+esc(g.name)+'</b>'
+      +'<div class="big">SAF '+g.usScore+' – '+g.oppScore+' '+esc(g.opponent||'OPP')+'</div>'
+      +np+' plays · <a href="#" id="startExport">export CSV</a></div>';
+    resumeBtn.style.display='block';
+    const ex=$('startExport');
+    if(ex) ex.addEventListener('click',e=>{ e.preventDefault(); if(g.plays.length){ download(csvName(g), csvFor(g)); g.lastExport=g.plays.length; save(); toast('CSV downloaded'); } else toast('No plays to export'); });
+  } else {
+    $('startTitle').textContent = db.games.length? 'Start a game' : 'Start your first game';
+    sum.innerHTML=''; resumeBtn.style.display='none';
+  }
 }
 function renderLog(){
   renderHeader();
+  const ag=activeGame();
+  // no game in progress → show the Start screen, hide the logging UI
+  if(!ag){
+    renderStartCard();
+    $('startCard').style.display='block';
+    $('logUI').style.display='none';
+    $('savebar').style.display='none';
+    $('ctxStrip').style.display='none';
+    document.documentElement.setAttribute('data-side','O');
+    return;
+  }
+  $('startCard').style.display='none';
+  $('logUI').style.display='block';
+  if(document.querySelector('nav button.on')?.dataset.scr==='log'){ $('savebar').style.display='flex'; $('ctxStrip').style.display='flex'; }
+  // game bar + stale-day nudge
+  $('gbName').textContent = ag.name;
+  $('gbSub').textContent = (ag.opponent?('vs '+ag.opponent+' · '):'') + ag.plays.filter(p=>!p._divider).length + ' plays';
+  $('staleBanner').classList.toggle('show', ag.date!==todayStr());
   renderScore();
   $('xpBanner').classList.toggle('show', cur.pendingXP);
 
@@ -857,9 +948,9 @@ let lastSnapshot=null;
 function jerseyOf(name){ const p=db.roster.find(r=>r.name===name); return p? p.jersey : ''; }
 
 $('btnSave').addEventListener('click',()=>{
+  const g=activeGame();
+  if(!g){ toast('Start a game first'); return; }
   buzz(30);
-  ensureGame();
-  const g=game();
   const r = cur.resultIdx!=null? RESULTS[cur.resultIdx] : null;
   const isXP = cur.dn===0 || !!cur.xp;
   const rec={};
@@ -958,10 +1049,10 @@ $('btnUndo').addEventListener('click',()=>{
 function renumber(g){ let n=0; g.plays.forEach(pp=>{ if(pp._divider){ pp['PLAY #']=''; } else { n++; pp['PLAY #']=String(n); } }); }
 
 $('btnEndDrive').addEventListener('click',()=>{
+  const g=activeGame();
+  if(!g){ toast('Start a game first'); return; }
   if(!confirm('End the drive? This adds a blank row in the export and starts a new series.')) return;
   buzz(20);
-  ensureGame();
-  const g=game();
   const blank={}; COLS.forEach(c=>blank[c]=''); blank._divider=true;
   g.plays.push(blank);
   g.series++;
@@ -977,9 +1068,8 @@ document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()
   document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   $('scr-'+b.dataset.scr).classList.add('active');
-  $('savebar').style.display = b.dataset.scr==='log' ? 'flex':'none';
-  $('ctxStrip').style.display = b.dataset.scr==='log' ? 'flex':'none';
-  if(b.dataset.scr==='log') renderLog();
+  if(b.dataset.scr==='log'){ renderLog(); }   // renderLog shows/hides the save bar based on whether a game is running
+  else { $('savebar').style.display='none'; $('ctxStrip').style.display='none'; }
   if(b.dataset.scr==='plays') renderPlays();
   if(b.dataset.scr==='stats') renderStats();
   if(b.dataset.scr==='team') renderTeam();
@@ -1355,14 +1445,7 @@ $('btnAddPlayer').addEventListener('click',()=>{
   $('inPlayerName').value=''; $('inPlayerJersey').value='';
   save(); renderTeam();
 });
-$('btnNewGame').addEventListener('click',()=>{
-  const d=new Date().toISOString().slice(0,10);
-  const name=prompt('Game name (e.g. "vs Bern 2026-07-25"):','Game '+d);
-  if(name===null) return;
-  const g={id:uid(), name:name||('Game '+d), date:d, plays:[], series:1, lastExport:0, usScore:0, oppScore:0, opponent:''};
-  db.games.push(g); db.currentGameId=g.id;
-  freshCur(); save(); renderTeam(); renderLog(); toast('New game started');
-});
+$('btnNewGame').addEventListener('click',()=>{ newGameFlow(); goLog(); });
 $('btnRenameGame').addEventListener('click',()=>{
   const g=game(); if(!g) return;
   const name=prompt('Game name:',g.name);
@@ -1565,13 +1648,17 @@ $('btnBlankApp').addEventListener('click',async()=>{
 
 /* ================= Init ================= */
 function bootApp(){
-  ensureGame();
   applyTheme();
   freshCur();
-  $('ctxStrip').style.display='flex';
-  renderLog();
+  renderLog();     // shows the Start screen if no game is in progress
   renderLockStatus();
 }
+function goLog(){ const btn=document.querySelector('nav button[data-scr="log"]'); if(btn) btn.click(); }
+$('btnStartGame').addEventListener('click',startGame);
+$('startOpp').addEventListener('keydown',e=>{ if(e.key==='Enter') startGame(); });
+$('btnResumeGame').addEventListener('click',resumeGame);
+$('btnEndGame').addEventListener('click',endGame);
+$('btnStaleNew').addEventListener('click',newGameFlow);
 (function startUp(){
   applyTheme();
   renderLockStatus();
