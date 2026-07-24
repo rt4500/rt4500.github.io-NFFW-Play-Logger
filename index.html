@@ -276,7 +276,7 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
     <button class="gbend" id="btnEndGame">⏹ End game</button>
   </div>
   <div class="stalebanner" id="staleBanner">This game was started earlier — <b>start a new one?</b> <button id="btnStaleNew">New game</button></div>
-  <div class="xpbanner" id="xpBanner">🏈 TD! Logging the extra point — pick 1P or 2P below.</div>
+  <div class="xpbanner" id="xpBanner">🏈 TD! Logging the extra point — pick 1P or 2P, then <b>Complete / TD = good</b>, anything else = no good.</div>
   <div class="nudge" id="exportNudge"><span id="nudgeText"></span><button id="btnNudgeExport">Export now</button><button id="btnNudgeDismiss" class="dismiss">✕</button></div>
   <button class="repeatbtn" id="btnRepeat">↻ Repeat last play call</button>
 
@@ -687,6 +687,19 @@ function chipRow(container, values, isOn, onTap, cls){
     container.appendChild(c);
   });
 }
+/* An extra point counts as good when it was logged as Complete / Complete+TD / TD */
+function xpMade(p){ return ['Complete','Complete, TD','TD'].includes(p['RESULT']); }
+function isXPplay(p){ return p['DN']==='0' || !!p['XP']; }
+/* XP rows for the "by down" tables: one per conversion type actually used */
+function xpDownRows(off){
+  const m={};
+  off.filter(isXPplay).forEach(p=>{
+    const k = p['XP'] ? 'XP '+p['XP'] : 'XP';
+    m[k]=m[k]||{n:0,good:0};
+    m[k].n++; if(xpMade(p)) m[k].good++;
+  });
+  return Object.keys(m).sort().map(k=>({name:k, n:m[k].n, good:m[k].good, pct:Math.round(100*m[k].good/m[k].n)}));
+}
 /* Alphabetical, case-insensitive, digits compared as numbers (PLAY 2 before PLAY 10) */
 const _coll = (typeof Intl!=='undefined' && Intl.Collator) ? new Intl.Collator(undefined,{numeric:true,sensitivity:'base'}) : null;
 function byName(a,b){ return _coll ? _coll.compare(a,b) : String(a).toUpperCase().localeCompare(String(b).toUpperCase()); }
@@ -1040,7 +1053,8 @@ $('btnSave').addEventListener('click',()=>{
   // auto-scoring: TD = 6, XP 1P = 1, 2P = 2, credited to the side with the ball
   if(db.settings.autoScore){
     let pts=0;
-    if(isXP) pts = cur.xp==='2P'?2 : (cur.xp==='1P'?1:0);
+    // an XP only scores when it was good — Complete / Complete+TD / TD
+    if(isXP) pts = (r && r.rw==='COMPLETION') ? (cur.xp==='2P'?2 : (cur.xp==='1P'?1:0)) : 0;
     else if(wasTD) pts = 6;
     if(pts){ if(cur.odk==='D') g.oppScore+=pts; else g.usScore+=pts; }
   }
@@ -1350,9 +1364,12 @@ function renderStats(){
       const downs={};
       off.forEach(p=>{ const d=p['DN']; if(!d||d==='0') return; downs[d]=downs[d]||{n:0,y:0,yds:0}; downs[d].n++; if(p['EFF']==='Y')downs[d].y++; downs[d].yds+=num(p['GN/LS']); });
       const dr=Object.keys(downs).sort();
-      if(dr.length){
+      const xpr=xpDownRows(off);
+      if(dr.length||xpr.length){
         let dbody='';
         dr.forEach(d=>{ const x=downs[d]; dbody+='<div class="playrow"><div class="no">'+esc(d)+'</div><div class="desc"><div class="l1">Down '+esc(d)+'</div><div class="l2">'+x.n+' plays · '+Math.round(10*x.yds/x.n)/10+' yds/play</div></div><div class="gain">'+Math.round(100*x.y/x.n)+'%</div></div>'; });
+        xpr.forEach(x=>{ dbody+='<div class="playrow"><div class="no">XP</div><div class="desc"><div class="l1">'+esc(x.name)+'</div><div class="l2">'+x.good+'/'+x.n+' good</div></div><div class="gain">'+x.pct+'%</div></div>'; });
+        if(xpr.length) dbody+='<div class="l2" style="padding:4px 2px 0">XP rows: % = conversions made. Downs 1–4 show efficiency.</div>';
         html+=fold('byDown', 'By down', dbody);
       }
     }
@@ -1486,7 +1503,10 @@ function statsModel(){
     const dn={};
     off.forEach(p=>{ const d=p['DN']; if(!d||d==='0') return; dn[d]=dn[d]||{n:0,y:0,yds:0}; dn[d].n++; if(p['EFF']==='Y')dn[d].y++; dn[d].yds+=num(p['GN/LS']); });
     const dRows=Object.keys(dn).sort().map(d=>[d,dn[d].n,(dn[d].yds/dn[d].n).toFixed(1),pct(dn[d].y,dn[d].n)]);
-    if(dRows.length) S.push({t:'By down', head:['Down','Plays','Yds/play','Eff%'], numFrom:1, rows:dRows});
+    const xpr=xpDownRows(off);
+    xpr.forEach(x=>dRows.push([x.name, x.n, '—', x.pct+'%']));
+    if(dRows.length) S.push({t:'By down', head:['Down','Plays','Yds/play','Eff%'], numFrom:1, rows:dRows,
+      note: xpr.length? 'XP rows: Eff% = conversions made (Complete / TD = good).' : ''});
   }
   if(def.length){
     const dYds=def.reduce((s,p)=>s+num(p['GN/LS']),0);
@@ -1524,6 +1544,7 @@ function exportStats(){
     line(s.t.toUpperCase());
     if(s.kv) s.kv.forEach(r=>line(r[0],r[1]));
     else { line.apply(null,s.head); s.rows.forEach(r=>line.apply(null,r)); }
+    if(s.note) line(s.note);
     line('');
   });
   download('SAF_stats_'+todayStr()+'.csv', '﻿'+rows.join('\r\n'));
