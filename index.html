@@ -355,7 +355,11 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
 
 <!-- ============ STATS ============ -->
 <section class="screen" id="scr-stats">
-  <div class="row" style="margin:8px 0"><div class="chips" id="statScope"></div></div>
+  <div class="card" style="padding:10px">
+    <label class="f" style="margin-top:0">GAMES IN STATS <span class="muted" id="statGamesCount"></span></label>
+    <div class="chips" id="statGamesSel"></div>
+    <button class="btn sec" id="btnExportStats" style="margin-top:10px">⬇️ Export these stats (CSV)</button>
+  </div>
   <div id="statsBody"></div>
 </section>
 
@@ -1174,13 +1178,47 @@ function closeEdit(){ $('editModal').classList.remove('open'); }
 $('editModal').addEventListener('click',e=>{ if(e.target===$('editModal')) closeEdit(); });
 
 /* ================= STATS ================= */
-let statScope='game', statCov='';
+// NFL passer rating (0–158.3). d = {att,cmp,yds,td,int}
+function passerRating(d){
+  const att=d.att||0; if(!att) return 0;
+  const cap=x=>Math.max(0,Math.min(2.375,x));
+  const a=cap(((d.cmp/att)-0.3)*5);
+  const b=cap(((d.yds/att)-3)*0.25);
+  const c=cap((d.td/att)*20);
+  const e=cap(2.375-((d.int/att)*25));
+  return ((a+b+c+e)/6)*100;
+}
+let statSel=null, statCov='';   // statSel = array of selected game ids (null = default to current game)
 let statFold={effPlay:true, byDown:true};   // remembers open/closed per session
+function selectedGameIds(){
+  const allIds=db.games.map(g=>g.id);
+  if(statSel===null){ const g=game(); statSel = g? [g.id] : allIds.slice(); }
+  statSel = statSel.filter(id=>allIds.includes(id));   // drop deleted games
+  return statSel;
+}
+function selectedPlays(){
+  const sel=selectedGameIds();
+  return db.games.filter(g=>sel.includes(g.id)).flatMap(g=>g.plays);
+}
 function renderStats(){
-  chipRow($('statScope'), [{label:'This game',v:'game'},{label:'All games',v:'all'}], o=>statScope===o.v, o=>{statScope=o.v; renderStats();});
-  const plays = statScope==='game' ? (game()?game().plays:[]) : db.games.flatMap(g=>g.plays);
+  // game multi-select
+  const allIds=db.games.map(g=>g.id);
+  const gsel=selectedGameIds();
+  const box=$('statGamesSel'); box.innerHTML='';
+  const allOn = allIds.length>0 && gsel.length===allIds.length;
+  const allChip=el('button',{class:'chip sm'+(allOn?' on':''),type:'button'},'All games');
+  allChip.addEventListener('click',()=>{ statSel = allOn? (game()?[game().id]:[]) : allIds.slice(); renderStats(); });
+  box.appendChild(allChip);
+  db.games.forEach(g=>{
+    const on=gsel.includes(g.id);
+    const c=el('button',{class:'chip sm'+(on?' on':''),type:'button'}, esc(g.name)+(g.status==='ended'?'':' •'));
+    c.addEventListener('click',()=>{ statSel = on? gsel.filter(x=>x!==g.id) : [...gsel,g.id]; renderStats(); });
+    box.appendChild(c);
+  });
+  $('statGamesCount').textContent = db.games.length? '('+gsel.length+' of '+db.games.length+')' : '';
+  const plays = selectedPlays();
   const body=$('statsBody');
-  if(!plays.length){ statCov=''; body.innerHTML='<div class="card muted">No plays yet.</div>'; return; }
+  if(!plays.length){ statCov=''; body.innerHTML='<div class="card muted">No plays in the selected game(s). Tick one or more games above.</div>'; return; }
   const num=v=>parseInt(v||'0',10)||0;
   // coverage filter — "what works vs COVER X"
   const covList=[...new Set(plays.filter(p=>p['ODK']!=='K').map(p=>p['COVERAGE']).filter(Boolean))].sort();
@@ -1297,18 +1335,21 @@ function renderStats(){
   const passers={};
   passes.forEach(p=>{
     const n=p['PASSER_Name']; if(!n) return;
-    passers[n]=passers[n]||{att:0,cmp:0,yds:0,td:0};
+    passers[n]=passers[n]||{att:0,cmp:0,yds:0,td:0,int:0};
     passers[n].att++;
     if(['Complete','Complete, TD','TD'].includes(p['RESULT'])){ passers[n].cmp++; passers[n].yds+=num(p['GN/LS']); }
     if(/TD/.test(p['RESULT'])) passers[n].td++;
+    if(p['RESULT']==='Interception') passers[n].int++;
   });
-  const pr=Object.entries(passers);
+  const pr=Object.entries(passers).sort((a,b)=>passerRating(b[1])-passerRating(a[1]));
   if(pr.length){
-    html+='<div class="card"><h3 style="margin-top:0">Passers'+covTag+'</h3>';
+    html+='<div class="card"><h3 style="margin-top:0">Passers'+covTag+'</h3>'
+      +'<div class="l2" style="padding:0 0 6px">Big number = passer rating (NFL formula, 0–158.3)</div>';
     pr.forEach(([n,d])=>{
+      const ya=d.att?(d.yds/d.att).toFixed(1):'0';
       html+='<div class="playrow"><div class="desc"><div class="l1">'+esc(n)+'</div>'
-        +'<div class="l2">'+d.cmp+'/'+d.att+' · '+d.yds+' yds · '+d.td+' TD</div></div>'
-        +'<div class="gain">'+Math.round(100*d.cmp/d.att)+'%</div></div>';
+        +'<div class="l2">'+d.cmp+'/'+d.att+' ('+Math.round(100*d.cmp/d.att)+'%) · '+d.yds+' yds · '+ya+' Y/A · '+d.td+' TD'+(d.int?' · '+d.int+' INT':'')+'</div></div>'
+        +'<div class="gain">'+passerRating(d).toFixed(1)+'</div></div>';
     });
     html+='</div>';
   }
@@ -1348,6 +1389,52 @@ function renderStats(){
   // remember which collapsible sections are open/closed
   body.querySelectorAll('.statfold').forEach(d=>d.addEventListener('toggle',()=>{ statFold[d.dataset.fold]=d.open; }));
 }
+
+function exportStats(){
+  const plays=selectedPlays();
+  if(!plays.length){ toast('No plays in the selected game(s)'); return; }
+  const num=v=>parseInt(v||'0',10)||0;
+  const off=plays.filter(p=>p['ODK']==='O'), def=plays.filter(p=>p['ODK']==='D');
+  const q=v=>{ v=String(v==null?'':v); return /[",\n\r]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const rows=[]; const line=(...a)=>rows.push(a.map(q).join(','));
+  const gnames=db.games.filter(g=>selectedGameIds().includes(g.id)).map(g=>g.name);
+  line('SAF Play Logger — Stats'); line('Games', gnames.join(' | ')); line('');
+  const passesO=off.filter(p=>['Complete','Incomplete','Complete, TD','TD','Tipped','Interception'].includes(p['RESULT']));
+  const compsO=off.filter(p=>['Complete','Complete, TD','TD'].includes(p['RESULT']));
+  const effP=off.filter(p=>p['EFF']==='Y'||p['EFF']==='N');
+  line('OFFENSE SUMMARY');
+  line('Plays',off.length); line('Yards',off.reduce((s,p)=>s+num(p['GN/LS']),0));
+  line('TD',off.filter(p=>/TD/.test(p['RESULT']||'')).length);
+  line('Completion %', passesO.length?Math.round(100*compsO.length/passesO.length)+'%':'-');
+  line('Efficient %', effP.length?Math.round(100*effP.filter(p=>p['EFF']==='Y').length/effP.length)+'%':'-');
+  line('Yards/play', off.length?(off.reduce((s,p)=>s+num(p['GN/LS']),0)/off.length).toFixed(1):'-'); line('');
+  line('PASSERS'); line('Name','Att','Cmp','Cmp%','Yds','Y/A','TD','INT','Rating');
+  const P={};
+  passesO.forEach(p=>{ const n=p['PASSER_Name']; if(!n)return; P[n]=P[n]||{att:0,cmp:0,yds:0,td:0,int:0}; P[n].att++; if(['Complete','Complete, TD','TD'].includes(p['RESULT'])){P[n].cmp++;P[n].yds+=num(p['GN/LS']);} if(/TD/.test(p['RESULT']))P[n].td++; if(p['RESULT']==='Interception')P[n].int++; });
+  Object.entries(P).sort((a,b)=>passerRating(b[1])-passerRating(a[1])).forEach(([n,d])=>line(n,d.att,d.cmp,Math.round(100*d.cmp/d.att)+'%',d.yds,(d.yds/d.att).toFixed(1),d.td,d.int,passerRating(d).toFixed(1)));
+  line('');
+  line('RECEIVERS'); line('Name','Targets','Catches','Catch%','Yds','Avg','TD','Drops');
+  const R={};
+  passesO.forEach(p=>{ const n=p['RECEIVER_Name']; if(!n)return; R[n]=R[n]||{tgt:0,rec:0,yds:0,td:0,drop:0}; R[n].tgt++; if(['Complete','Complete, TD','TD'].includes(p['RESULT'])){R[n].rec++;R[n].yds+=num(p['GN/LS']);} if(/TD/.test(p['RESULT']))R[n].td++; if(p['RESULT W']==='DROPPED')R[n].drop++; });
+  Object.entries(R).sort((a,b)=>b[1].rec-a[1].rec).forEach(([n,d])=>line(n,d.tgt,d.rec,Math.round(100*d.rec/d.tgt)+'%',d.yds,(d.rec?d.yds/d.rec:0).toFixed(1),d.td,d.drop));
+  line('');
+  line('BY PLAY CALL'); line('Play','Calls','Yds/play','Total yds','TD','Eff%');
+  const C={};
+  off.forEach(p=>{ const k=p['OFF PLAY']; if(!k)return; C[k]=C[k]||{n:0,yds:0,eA:0,eY:0,td:0}; C[k].n++; C[k].yds+=num(p['GN/LS']); if(p['EFF']==='Y'||p['EFF']==='N'){C[k].eA++; if(p['EFF']==='Y')C[k].eY++;} if(/TD/.test(p['RESULT']||''))C[k].td++; });
+  Object.entries(C).sort((a,b)=>b[1].n-a[1].n).forEach(([k,d])=>line(k,d.n,(d.yds/d.n).toFixed(1),d.yds,d.td,d.eA?Math.round(100*d.eY/d.eA)+'%':'-'));
+  if(def.length){
+    line(''); line('DEFENSE'); line('Plays',def.length); line('Yards allowed',def.reduce((s,p)=>s+num(p['GN/LS']),0));
+    const dStops=def.filter(p=>['Incomplete','Tipped','Interception'].includes(p['RESULT'])).length;
+    line('Forced incompletions %', Math.round(100*dStops/def.length)+'%');
+    line(''); line('OUR COVERAGE — opp eff% (lower=better)'); line('Coverage','Plays','Opp eff%');
+    const DC={};
+    def.forEach(p=>{ const k=p['COVERAGE']; if(!k)return; DC[k]=DC[k]||{n:0,eA:0,eY:0}; DC[k].n++; if(p['EFF']==='Y'||p['EFF']==='N'){DC[k].eA++; if(p['EFF']==='Y')DC[k].eY++;} });
+    Object.entries(DC).sort((a,b)=>b[1].n-a[1].n).forEach(([k,d])=>line(k,d.n,d.eA?Math.round(100*d.eY/d.eA)+'%':'-'));
+  }
+  download('SAF_stats_'+todayStr()+'.csv', '﻿'+rows.join('\r\n'));
+  toast('Stats CSV downloaded');
+}
+$('btnExportStats').addEventListener('click',exportStats);
 
 /* ================= TEAM / SETUP ================= */
 function renderTeam(){
