@@ -139,6 +139,33 @@ nav button.on{color:var(--accent);}
 .btn{background:var(--accent); color:var(--accent-ink); border:none; border-radius:12px; font-size:1.05rem; font-weight:800; min-height:56px; padding:0 18px; width:100%; margin:6px 0; box-shadow:var(--shadow);}
 .btn.sec{background:var(--card); color:var(--ink); border:2px solid var(--line);}
 .btn.danger{background:var(--bad);}
+.btnpair{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+.btnpair .btn{margin:0;}
+/* printable stats sheet (hidden on screen, shown only while printing) */
+#printArea{display:none;}
+@media print{
+  body.printing > *{display:none !important;}
+  body.printing #printArea{display:block !important;}
+  body.printing{background:#fff !important;}
+  @page{size:A4 portrait; margin:14mm;}
+  #printArea{color:#000; font:12px/1.35 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+  #printArea h1{font-size:18px; margin:0 0 2px;}
+  #printArea h2{font-size:13px; margin:14px 0 4px; padding-bottom:3px; border-bottom:2px solid #0b3d91; color:#0b3d91; text-transform:uppercase; letter-spacing:.04em; break-after:avoid;}
+  #printArea .phead{display:flex; align-items:center; gap:10px; border-bottom:3px solid #0b3d91; padding-bottom:6px;}
+  #printArea .phead img{height:34px; width:auto;}
+  #printArea .psub{font-size:11px; color:#444;}
+  #printArea table{width:100%; border-collapse:collapse; font-size:11px; break-inside:auto;}
+  #printArea thead{display:table-header-group;}
+  #printArea th{text-align:left; background:#eef2f9; border-bottom:1px solid #b9c4d8; padding:3px 5px; font-size:10px; text-transform:uppercase; letter-spacing:.03em;}
+  #printArea td{border-bottom:1px solid #e2e6ee; padding:3px 5px;}
+  #printArea td.n, #printArea th.n{text-align:right; white-space:nowrap;}
+  #printArea tr{break-inside:avoid;}
+  #printArea .kv{display:flex; flex-wrap:wrap; gap:6px;}
+  #printArea .kv div{border:1px solid #ccd4e4; border-radius:5px; padding:4px 8px; min-width:78px;}
+  #printArea .kv b{display:block; font-size:15px;}
+  #printArea .kv span{font-size:9px; text-transform:uppercase; color:#555; letter-spacing:.04em;}
+  #printArea .foot{margin-top:14px; font-size:9px; color:#666; border-top:1px solid #ccc; padding-top:4px;}
+}
 .modal{position:fixed; inset:0; z-index:50; background:rgba(0,0,0,.55); display:none; align-items:flex-end; justify-content:center;}
 .modal.open{display:flex;}
 .sheet{background:var(--bg); width:100%; max-width:720px; max-height:92vh; overflow:auto; border-radius:18px 18px 0 0; padding:14px 14px 30px;}
@@ -358,7 +385,11 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
   <div class="card" style="padding:10px">
     <label class="f" style="margin-top:0">GAMES IN STATS <span class="muted" id="statGamesCount"></span></label>
     <div class="chips" id="statGamesSel"></div>
-    <button class="btn sec" id="btnExportStats" style="margin-top:10px">⬇️ Export these stats (CSV)</button>
+    <div class="btnpair" style="margin-top:10px">
+      <button class="btn sec" id="btnExportStats">⬇️ CSV</button>
+      <button class="btn sec" id="btnExportStatsPdf">🧾 PDF</button>
+    </div>
+    <div class="muted">PDF opens your device’s print sheet — choose “Save as PDF”.</div>
   </div>
   <div id="statsBody"></div>
 </section>
@@ -398,6 +429,9 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
     <label class="f">TRACK DOWN &amp; DISTANCE</label>
     <div class="chips" id="ddToggle"></div>
     <div class="muted">Off = down/distance hidden while logging and left blank in the export. You can still set the down on any single play with the “–/1/2/3/4” buttons.</div>
+    <label class="f" style="margin-top:12px">PLAY BUTTON ORDER (Log tab)</label>
+    <div class="chips" id="playOrderToggle"></div>
+    <div class="muted">A–Z keeps every play call in the same spot all game. Most used puts the calls you run often at the front. Starred favourites stay on top either way.</div>
   </div>
   <h3>Display &amp; feel</h3>
   <div class="card">
@@ -472,6 +506,7 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
 </nav>
 
 <div class="modal" id="editModal"><div class="sheet" id="editSheet"></div></div>
+<div id="printArea"></div>
 <div class="toast" id="toast"></div>
 <div class="lockgate" id="lockGate">
   <div class="lockcard">
@@ -519,7 +554,7 @@ async function decryptPresets(password, blob){
 
 const DEFAULT_DB = {
   version:1,
-  settings:{ team:'SAF', theme:'day', defaultDist:20, wake:false, trackDD:true, exportEvery:15, logMode:'O', autoScore:true, haptics:true, bright:false },
+  settings:{ team:'SAF', theme:'day', defaultDist:20, wake:false, trackDD:true, exportEvery:15, logMode:'O', autoScore:true, haptics:true, bright:false, playOrder:'name' },
   lists:{ forms:[], plays:[], fronts:[], blitzes:[], coverages:[], audibles:[], favorites:[], oppForms:[], oppPlays:[] },
   roster:[],
   games:[],
@@ -652,6 +687,9 @@ function chipRow(container, values, isOn, onTap, cls){
     container.appendChild(c);
   });
 }
+/* Alphabetical, case-insensitive, digits compared as numbers (PLAY 2 before PLAY 10) */
+const _coll = (typeof Intl!=='undefined' && Intl.Collator) ? new Intl.Collator(undefined,{numeric:true,sensitivity:'base'}) : null;
+function byName(a,b){ return _coll ? _coll.compare(a,b) : String(a).toUpperCase().localeCompare(String(b).toUpperCase()); }
 /* Frequency of play usage across all games for smart ordering */
 function playFreq(){
   const f={};
@@ -763,15 +801,19 @@ function renderLog(){
   const q=($('playSearch').value||'').toUpperCase();
   let plays;
   if(onD){
-    plays=(db.lists.oppPlays||[]).filter(p=>!q||p.toUpperCase().includes(q)).map(p=>({label:p,v:p}));
+    const oppSorted=[...(db.lists.oppPlays||[])];
+    if(db.settings.playOrder!=='freq') oppSorted.sort(byName);
+    plays=oppSorted.filter(p=>!q||p.toUpperCase().includes(q)).map(p=>({label:p,v:p}));
     $('playSearch').placeholder='Search opponent plays…';
   } else {
-    const freq=playFreq();
+    const byFreq = db.settings.playOrder==='freq';
+    const freq=byFreq?playFreq():null;
     const favs=db.lists.favorites||[];
     const sorted=[...db.lists.plays].sort((a,b)=>{
       const fa=favs.includes(a), fb=favs.includes(b);
       if(fa!==fb) return fa?-1:1;
-      return (freq[b]||0)-(freq[a]||0) || a.localeCompare(b);
+      if(byFreq){ const d=(freq[b]||0)-(freq[a]||0); if(d) return d; }
+      return byName(a,b);
     });
     plays=sorted.filter(p=>!q||p.toUpperCase().includes(q)).map(p=>({label:(favs.includes(p)?'★ ':'')+p, v:p}));
     $('playSearch').placeholder='Search plays…';
@@ -1390,51 +1432,136 @@ function renderStats(){
   body.querySelectorAll('.statfold').forEach(d=>d.addEventListener('toggle',()=>{ statFold[d.dataset.fold]=d.open; }));
 }
 
-function exportStats(){
+/* ---- shared stats model: one place that computes the numbers, used by CSV + PDF ---- */
+function statsModel(){
   const plays=selectedPlays();
-  if(!plays.length){ toast('No plays in the selected game(s)'); return; }
+  if(!plays.length) return null;
   const num=v=>parseInt(v||'0',10)||0;
   const off=plays.filter(p=>p['ODK']==='O'), def=plays.filter(p=>p['ODK']==='D');
-  const q=v=>{ v=String(v==null?'':v); return /[",\n\r]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
-  const rows=[]; const line=(...a)=>rows.push(a.map(q).join(','));
-  const gnames=db.games.filter(g=>selectedGameIds().includes(g.id)).map(g=>g.name);
-  line('SAF Play Logger — Stats'); line('Games', gnames.join(' | ')); line('');
+  const games=db.games.filter(g=>selectedGameIds().includes(g.id));
   const passesO=off.filter(p=>['Complete','Incomplete','Complete, TD','TD','Tipped','Interception'].includes(p['RESULT']));
   const compsO=off.filter(p=>['Complete','Complete, TD','TD'].includes(p['RESULT']));
   const effP=off.filter(p=>p['EFF']==='Y'||p['EFF']==='N');
-  line('OFFENSE SUMMARY');
-  line('Plays',off.length); line('Yards',off.reduce((s,p)=>s+num(p['GN/LS']),0));
-  line('TD',off.filter(p=>/TD/.test(p['RESULT']||'')).length);
-  line('Completion %', passesO.length?Math.round(100*compsO.length/passesO.length)+'%':'-');
-  line('Efficient %', effP.length?Math.round(100*effP.filter(p=>p['EFF']==='Y').length/effP.length)+'%':'-');
-  line('Yards/play', off.length?(off.reduce((s,p)=>s+num(p['GN/LS']),0)/off.length).toFixed(1):'-'); line('');
-  line('PASSERS'); line('Name','Att','Cmp','Cmp%','Yds','Y/A','TD','INT','Rating');
-  const P={};
-  passesO.forEach(p=>{ const n=p['PASSER_Name']; if(!n)return; P[n]=P[n]||{att:0,cmp:0,yds:0,td:0,int:0}; P[n].att++; if(['Complete','Complete, TD','TD'].includes(p['RESULT'])){P[n].cmp++;P[n].yds+=num(p['GN/LS']);} if(/TD/.test(p['RESULT']))P[n].td++; if(p['RESULT']==='Interception')P[n].int++; });
-  Object.entries(P).sort((a,b)=>passerRating(b[1])-passerRating(a[1])).forEach(([n,d])=>line(n,d.att,d.cmp,Math.round(100*d.cmp/d.att)+'%',d.yds,(d.yds/d.att).toFixed(1),d.td,d.int,passerRating(d).toFixed(1)));
-  line('');
-  line('RECEIVERS'); line('Name','Targets','Catches','Catch%','Yds','Avg','TD','Drops');
-  const R={};
-  passesO.forEach(p=>{ const n=p['RECEIVER_Name']; if(!n)return; R[n]=R[n]||{tgt:0,rec:0,yds:0,td:0,drop:0}; R[n].tgt++; if(['Complete','Complete, TD','TD'].includes(p['RESULT'])){R[n].rec++;R[n].yds+=num(p['GN/LS']);} if(/TD/.test(p['RESULT']))R[n].td++; if(p['RESULT W']==='DROPPED')R[n].drop++; });
-  Object.entries(R).sort((a,b)=>b[1].rec-a[1].rec).forEach(([n,d])=>line(n,d.tgt,d.rec,Math.round(100*d.rec/d.tgt)+'%',d.yds,(d.rec?d.yds/d.rec:0).toFixed(1),d.td,d.drop));
-  line('');
-  line('BY PLAY CALL'); line('Play','Calls','Yds/play','Total yds','TD','Eff%');
-  const C={};
-  off.forEach(p=>{ const k=p['OFF PLAY']; if(!k)return; C[k]=C[k]||{n:0,yds:0,eA:0,eY:0,td:0}; C[k].n++; C[k].yds+=num(p['GN/LS']); if(p['EFF']==='Y'||p['EFF']==='N'){C[k].eA++; if(p['EFF']==='Y')C[k].eY++;} if(/TD/.test(p['RESULT']||''))C[k].td++; });
-  Object.entries(C).sort((a,b)=>b[1].n-a[1].n).forEach(([k,d])=>line(k,d.n,(d.yds/d.n).toFixed(1),d.yds,d.td,d.eA?Math.round(100*d.eY/d.eA)+'%':'-'));
-  if(def.length){
-    line(''); line('DEFENSE'); line('Plays',def.length); line('Yards allowed',def.reduce((s,p)=>s+num(p['GN/LS']),0));
-    const dStops=def.filter(p=>['Incomplete','Tipped','Interception'].includes(p['RESULT'])).length;
-    line('Forced incompletions %', Math.round(100*dStops/def.length)+'%');
-    line(''); line('OUR COVERAGE — opp eff% (lower=better)'); line('Coverage','Plays','Opp eff%');
-    const DC={};
-    def.forEach(p=>{ const k=p['COVERAGE']; if(!k)return; DC[k]=DC[k]||{n:0,eA:0,eY:0}; DC[k].n++; if(p['EFF']==='Y'||p['EFF']==='N'){DC[k].eA++; if(p['EFF']==='Y')DC[k].eY++;} });
-    Object.entries(DC).sort((a,b)=>b[1].n-a[1].n).forEach(([k,d])=>line(k,d.n,d.eA?Math.round(100*d.eY/d.eA)+'%':'-'));
+  const oYds=off.reduce((s,p)=>s+num(p['GN/LS']),0);
+  const pct=(a,b)=>b? Math.round(100*a/b)+'%' : '—';
+  const S=[];
+  if(off.length){
+    S.push({t:'Offense summary', kv:[
+      ['Plays',off.length], ['Yards',oYds], ['TD',off.filter(p=>/TD/.test(p['RESULT']||'')).length],
+      ['Yards/play',(oYds/off.length).toFixed(1)],
+      ['Completion %',pct(compsO.length,passesO.length)],
+      ['Efficient %',pct(effP.filter(p=>p['EFF']==='Y').length,effP.length)]
+    ]});
+    const P={};
+    passesO.forEach(p=>{ const n=p['PASSER_Name']; if(!n)return; P[n]=P[n]||{att:0,cmp:0,yds:0,td:0,int:0}; P[n].att++;
+      if(['Complete','Complete, TD','TD'].includes(p['RESULT'])){P[n].cmp++;P[n].yds+=num(p['GN/LS']);}
+      if(/TD/.test(p['RESULT']))P[n].td++; if(p['RESULT']==='Interception')P[n].int++; });
+    const prRows=Object.entries(P).sort((a,b)=>passerRating(b[1])-passerRating(a[1]))
+      .map(([n,d])=>[n,d.att,d.cmp,pct(d.cmp,d.att),d.yds,(d.yds/d.att).toFixed(1),d.td,d.int,passerRating(d).toFixed(1)]);
+    if(prRows.length) S.push({t:'Passers', head:['Name','Att','Cmp','Cmp%','Yds','Y/A','TD','INT','Rating'], numFrom:1, rows:prRows,
+      note:'Rating = NFL passer rating (0–158.3).'});
+    const R={};
+    passesO.forEach(p=>{ const n=p['RECEIVER_Name']; if(!n)return; R[n]=R[n]||{tgt:0,rec:0,yds:0,td:0,drop:0}; R[n].tgt++;
+      if(['Complete','Complete, TD','TD'].includes(p['RESULT'])){R[n].rec++;R[n].yds+=num(p['GN/LS']);}
+      if(/TD/.test(p['RESULT']))R[n].td++; if(p['RESULT W']==='DROPPED')R[n].drop++; });
+    const rrRows=Object.entries(R).sort((a,b)=>b[1].rec-a[1].rec||b[1].tgt-a[1].tgt)
+      .map(([n,d])=>[n,d.tgt,d.rec,pct(d.rec,d.tgt),d.yds,(d.rec?d.yds/d.rec:0).toFixed(1),d.td,d.drop]);
+    if(rrRows.length) S.push({t:'Receivers', head:['Name','Tgt','Rec','Catch%','Yds','Avg','TD','Drops'], numFrom:1, rows:rrRows});
+    const C={};
+    off.forEach(p=>{ const k=p['OFF PLAY']; if(!k)return; C[k]=C[k]||{n:0,yds:0,eA:0,eY:0,td:0}; C[k].n++; C[k].yds+=num(p['GN/LS']);
+      if(p['EFF']==='Y'||p['EFF']==='N'){C[k].eA++; if(p['EFF']==='Y')C[k].eY++;} if(/TD/.test(p['RESULT']||''))C[k].td++; });
+    const cRows=Object.entries(C).sort((a,b)=>b[1].n-a[1].n)
+      .map(([k,d])=>[k,d.n,(d.yds/d.n).toFixed(1),d.yds,d.td,d.eA?pct(d.eY,d.eA):'—']);
+    if(cRows.length) S.push({t:'By play call', head:['Play','Calls','Yds/play','Total yds','TD','Eff%'], numFrom:1, rows:cRows});
+    const F={};
+    off.forEach(p=>{ const k=p['OFF FORM']; if(!k)return; F[k]=F[k]||{n:0,yds:0,eA:0,eY:0}; F[k].n++; F[k].yds+=num(p['GN/LS']);
+      if(p['EFF']==='Y'||p['EFF']==='N'){F[k].eA++; if(p['EFF']==='Y')F[k].eY++;} });
+    const fRows=Object.entries(F).sort((a,b)=>b[1].n-a[1].n).map(([k,d])=>[k,d.n,(d.yds/d.n).toFixed(1),d.eA?pct(d.eY,d.eA):'—']);
+    if(fRows.length) S.push({t:'By formation', head:['Formation','Plays','Yds/play','Eff%'], numFrom:1, rows:fRows});
+    const V={};
+    off.forEach(p=>{ const k=p['COVERAGE']; if(!k)return; V[k]=V[k]||{n:0,yds:0,eA:0,eY:0}; V[k].n++; V[k].yds+=num(p['GN/LS']);
+      if(p['EFF']==='Y'||p['EFF']==='N'){V[k].eA++; if(p['EFF']==='Y')V[k].eY++;} });
+    const vRows=Object.entries(V).sort((a,b)=>b[1].n-a[1].n).map(([k,d])=>[k,d.n,(d.yds/d.n).toFixed(1),d.eA?pct(d.eY,d.eA):'—']);
+    if(vRows.length) S.push({t:'Vs coverage seen', head:['Coverage','Plays','Yds/play','Eff%'], numFrom:1, rows:vRows});
+    const dn={};
+    off.forEach(p=>{ const d=p['DN']; if(!d||d==='0') return; dn[d]=dn[d]||{n:0,y:0,yds:0}; dn[d].n++; if(p['EFF']==='Y')dn[d].y++; dn[d].yds+=num(p['GN/LS']); });
+    const dRows=Object.keys(dn).sort().map(d=>[d,dn[d].n,(dn[d].yds/dn[d].n).toFixed(1),pct(dn[d].y,dn[d].n)]);
+    if(dRows.length) S.push({t:'By down', head:['Down','Plays','Yds/play','Eff%'], numFrom:1, rows:dRows});
   }
+  if(def.length){
+    const dYds=def.reduce((s,p)=>s+num(p['GN/LS']),0);
+    const dEffP=def.filter(p=>p['EFF']==='Y'||p['EFF']==='N');
+    const dStops=def.filter(p=>['Incomplete','Tipped','Interception'].includes(p['RESULT'])).length;
+    S.push({t:'Defense', kv:[
+      ['Plays',def.length], ['Yards allowed',dYds], ['Yds/play',(dYds/def.length).toFixed(1)],
+      ['Opp efficient %',pct(dEffP.filter(p=>p['EFF']==='Y').length,dEffP.length)],
+      ['Forced incompl. %',pct(dStops,def.length)]
+    ]});
+    const DC={};
+    def.forEach(p=>{ const k=p['COVERAGE']; if(!k)return; DC[k]=DC[k]||{n:0,eA:0,eY:0,yds:0}; DC[k].n++; DC[k].yds+=num(p['GN/LS']);
+      if(p['EFF']==='Y'||p['EFF']==='N'){DC[k].eA++; if(p['EFF']==='Y')DC[k].eY++;} });
+    const dcRows=Object.entries(DC).sort((a,b)=>b[1].n-a[1].n).map(([k,d])=>[k,d.n,(d.yds/d.n).toFixed(1),d.eA?pct(d.eY,d.eA):'—']);
+    if(dcRows.length) S.push({t:'Our coverage (lower opp eff% = better)', head:['Coverage','Plays','Yds/play','Opp eff%'], numFrom:1, rows:dcRows});
+    const DP={};
+    def.forEach(p=>{ const k=p['OFF PLAY']; if(!k)return; DP[k]=DP[k]||{n:0,eA:0,eY:0,yds:0}; DP[k].n++; DP[k].yds+=num(p['GN/LS']);
+      if(p['EFF']==='Y'||p['EFF']==='N'){DP[k].eA++; if(p['EFF']==='Y')DP[k].eY++;} });
+    const dpRows=Object.entries(DP).sort((a,b)=>b[1].n-a[1].n).map(([k,d])=>[k,d.n,(d.yds/d.n).toFixed(1),d.eA?pct(d.eY,d.eA):'—']);
+    if(dpRows.length) S.push({t:'Opponent play calls faced', head:['Their play','Plays','Yds/play','Opp eff%'], numFrom:1, rows:dpRows});
+  }
+  return {games:games, sections:S};
+}
+
+function exportStats(){
+  const m=statsModel();
+  if(!m){ toast('No plays in the selected game(s)'); return; }
+  const q=v=>{ v=String(v==null?'':v); return /[",\n\r]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const rows=[]; const line=(...a)=>rows.push(a.map(q).join(','));
+  line('SAF Play Logger — Stats');
+  line('Games', m.games.map(g=>g.name).join(' | '));
+  line('Generated', todayStr());
+  line('');
+  m.sections.forEach(s=>{
+    line(s.t.toUpperCase());
+    if(s.kv) s.kv.forEach(r=>line(r[0],r[1]));
+    else { line.apply(null,s.head); s.rows.forEach(r=>line.apply(null,r)); }
+    line('');
+  });
   download('SAF_stats_'+todayStr()+'.csv', '﻿'+rows.join('\r\n'));
   toast('Stats CSV downloaded');
 }
+
+function exportStatsPDF(){
+  const m=statsModel();
+  if(!m){ toast('No plays in the selected game(s)'); return; }
+  const logo=document.querySelector('header .hlogo');
+  const scoreLine=g=>esc(g.name)+(g.opponent?'':'')+' — SAF '+(g.usScore||0)+':'+(g.oppScore||0)+' ('+g.plays.filter(p=>!p._divider).length+' plays)';
+  let h='<div class="phead">'+(logo?'<img src="'+logo.getAttribute('src')+'" alt="">':'')
+    +'<div><h1>'+esc(db.settings.team||'SAF')+' — Play stats</h1>'
+    +'<div class="psub">'+m.games.map(scoreLine).join(' &nbsp;·&nbsp; ')+'</div></div></div>';
+  m.sections.forEach(s=>{
+    h+='<h2>'+esc(s.t)+'</h2>';
+    if(s.kv){
+      h+='<div class="kv">'+s.kv.map(r=>'<div><b>'+esc(String(r[1]))+'</b><span>'+esc(r[0])+'</span></div>').join('')+'</div>';
+    } else {
+      const nf=(s.numFrom==null?1:s.numFrom);
+      h+='<table><thead><tr>'+s.head.map((c,i)=>'<th'+(i>=nf?' class="n"':'')+'>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>';
+      s.rows.forEach(r=>{ h+='<tr>'+r.map((c,i)=>'<td'+(i>=nf?' class="n"':'')+'>'+esc(String(c))+'</td>').join('')+'</tr>'; });
+      h+='</tbody></table>';
+      if(s.note) h+='<div class="psub">'+esc(s.note)+'</div>';
+    }
+  });
+  h+='<div class="foot">Generated '+todayStr()+' with the SAF Play Logger.</div>';
+  const area=$('printArea');
+  area.innerHTML=h;
+  document.body.classList.add('printing');
+  const done=()=>{ document.body.classList.remove('printing'); area.innerHTML=''; window.removeEventListener('afterprint',done); };
+  window.addEventListener('afterprint',done);
+  setTimeout(()=>{ try{ window.print(); }catch(e){ toast('Printing is not available on this device'); done(); } }, 60);
+  setTimeout(()=>{ if(document.body.classList.contains('printing')) done(); }, 60000);
+}
+
 $('btnExportStats').addEventListener('click',exportStats);
+$('btnExportStatsPdf').addEventListener('click',exportStatsPDF);
 
 /* ================= TEAM / SETUP ================= */
 function renderTeam(){
@@ -1456,6 +1583,9 @@ function renderTeam(){
   chipRow($('autoScoreToggle'), [{label:'On',v:true},{label:'Off',v:false}], o=>!!db.settings.autoScore===o.v, o=>{ db.settings.autoScore=o.v; save(); renderTeam(); });
   chipRow($('brightToggle'), [{label:'On',v:true},{label:'Off',v:false}], o=>!!db.settings.bright===o.v, o=>{ db.settings.bright=o.v; save(); applyTheme(); renderTeam(); });
   chipRow($('hapticToggle'), [{label:'On',v:true},{label:'Off',v:false}], o=>!!db.settings.haptics===o.v, o=>{ db.settings.haptics=o.v; save(); buzz(15); renderTeam(); });
+  chipRow($('playOrderToggle'), [{label:'A–Z',v:'name'},{label:'Most used',v:'freq'}], o=>(db.settings.playOrder||'name')===o.v, o=>{
+    db.settings.playOrder=o.v; save(); renderTeam(); renderLog();
+  });
   chipRow($('ddToggle'), [{label:'On',v:true},{label:'Off',v:false}], o=>!!db.settings.trackDD===o.v, o=>{
     db.settings.trackDD=o.v;
     if(cur){ if(!o.v && cur.dn!=null && cur.dn!==0) cur.dn=null; if(o.v && cur.dn==null) cur.dn=1; }
@@ -1755,7 +1885,7 @@ $('btnStaleNew').addEventListener('click',newGameFlow);
 })();
 </script>
 <script>
-if("serviceWorker" in navigator && location.protocol.startsWith("http")){window.addEventListener("load",()=>{navigator.serviceWorker.register("./sw.js").catch(()=>{});});}
+if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{})); }
 </script>
 </body>
 </html>
