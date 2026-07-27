@@ -140,6 +140,15 @@ nav button.on{color:var(--accent);}
 .btn.sec{background:var(--card); color:var(--ink); border:2px solid var(--line);}
 .btn.danger{background:var(--bad);}
 .btnpair{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+.fieldbar{display:grid; grid-template-columns:60px 1fr 60px; gap:8px; margin-top:10px;}
+.fieldbar button{
+  background:var(--chip); color:var(--ink); border:2px solid var(--line); border-radius:12px;
+  min-height:52px; font-size:1rem; font-weight:800; box-shadow:var(--shadow); cursor:pointer;
+}
+.fieldbar button:active{transform:scale(.97);}
+.fieldbar .fbspot{font-size:.95rem; letter-spacing:.01em;}
+.fieldbar .fbspot b{display:block; font-size:1.05rem;}
+.fieldbar .fbspot span{display:block; font-weight:700; font-size:.78rem; color:var(--ink3); text-transform:uppercase; letter-spacing:.06em;}
 .btnpair .btn{margin:0;}
 /* printable stats sheet (hidden on screen, shown only while printing) */
 #printArea{display:none;}
@@ -307,6 +316,12 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
       </div>
     </div>
     <div class="chips" id="xpChips" style="margin-top:8px"></div>
+    <div class="fieldbar" id="fieldBar">
+      <button type="button" id="fbMinus">−5</button>
+      <button type="button" class="fbspot" id="fbSpot"></button>
+      <button type="button" id="fbPlus">+5</button>
+    </div>
+    <div class="chips" id="fbZones" style="display:none; margin-top:8px"></div>
   </div>
 
   <button class="enddrive" id="btnEndDrive">⤵ End drive — blank row in export &amp; new series</button>
@@ -430,6 +445,14 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
     <label class="f">TRACK DOWN &amp; DISTANCE</label>
     <div class="chips" id="ddToggle"></div>
     <div class="muted">Off = down/distance hidden while logging and left blank in the export. You can still set the down on any single play with the “–/1/2/3/4” buttons.</div>
+    <label class="f" style="margin-top:12px">TRACK FIELD POSITION</label>
+    <div class="chips" id="fieldToggle"></div>
+    <div class="muted">On = a “ball is here” bar under the situation card. It moves itself by whatever each play gained, so most of the time you never touch it. Feeds the yard line in the Hudl export and the new “By field position” stats.</div>
+    <label class="f" style="margin-top:12px">FIELD LENGTH (yards)</label>
+    <input type="number" id="inFieldLen" inputmode="numeric">
+    <label class="f">DRIVE STARTS AT OWN</label>
+    <input type="number" id="inDriveStart" inputmode="numeric">
+    <div class="muted">Swiss 5-on-5 is usually a 50-yard field with drives from your own 5. Change these if your league plays differently.</div>
     <label class="f" style="margin-top:12px">PLAY BUTTON ORDER (Log tab)</label>
     <div class="chips" id="playOrderToggle"></div>
     <div class="muted">A–Z keeps every play call in the same spot all game. Most used puts the calls you run often at the front. Starred favourites stay on top either way.</div>
@@ -459,11 +482,14 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
 <section class="screen" id="scr-export">
   <h3>Hudl export</h3>
   <div class="card">
-    <label class="f">GAME</label>
-    <select id="expGameSelect"></select>
+    <label class="f">GAMES <span class="muted" id="expGamesCount"></span></label>
+    <div class="chips" id="expGamesSel"></div>
     <div class="muted" id="expInfo" style="margin:8px 0"></div>
     <button class="btn" id="btnExportCsv">⬇️ Download Hudl CSV</button>
     <button class="btn sec" id="btnShareCsv" data-share>📤 Send to Drive / share…</button>
+    <label class="f" style="margin-top:14px">WHEN SEVERAL GAMES ARE PICKED</label>
+    <div class="chips" id="expModeSel"></div>
+    <div class="muted" id="expModeHint"></div>
     <div class="muted" style="margin-top:8px">
       Import in Hudl: open the game video → <b>Data</b> → <b>Import Data</b> → upload this CSV.
       Column names match your existing Hudl breakdown (DN, DIST, PLAY TYPE, RESULT, GN/LS, ODK, …).
@@ -556,7 +582,7 @@ async function decryptPresets(password, blob){
 
 const DEFAULT_DB = {
   version:1,
-  settings:{ team:'SAF', theme:'day', defaultDist:20, wake:false, trackDD:true, exportEvery:15, logMode:'O', autoScore:true, haptics:true, bright:false, playOrder:'name' },
+  settings:{ team:'SAF', theme:'day', defaultDist:20, wake:false, trackDD:true, exportEvery:15, logMode:'O', autoScore:true, haptics:true, bright:false, playOrder:'name', trackField:true, fieldMid:25, driveStart:5 },
   lists:{ forms:[], plays:[], fronts:[], blitzes:[], coverages:[], audibles:[], favorites:[], oppForms:[], oppPlays:[] },
   roster:[],
   games:[],
@@ -659,6 +685,7 @@ function freshCur(keep){
     front:'', blitz:'', cov:'', bdir:'',
     passer:k.passer||'', receiver:'',
     resultIdx:null, gain:0, eff:'', effManual:false,
+    spot:('spot' in k)? clampSpot(k.spot) : driveStart(),
     zone:'', yac:'', yln:'', ptw:'',
     pendingXP:!!k.pendingXP
   };
@@ -690,6 +717,90 @@ function chipRow(container, values, isOn, onTap, cls){
   });
 }
 /* An extra point counts as good when it was logged as Complete / Complete+TD / TD */
+/* ================= Field position =================
+   spot = yards from OUR own goal line, 0 … fieldLen. The own-side marks are
+   fixed (the 10 and the 20); the opponent-side marks are 12 and 7 out from
+   their goal, so the zones travel correctly if you play a longer field. */
+function fieldMid(){ const v=parseInt(db.settings.fieldMid,10); return (v>0)?v:25; }
+function fieldLen(){ return fieldMid()*2; }
+function driveStart(){ const v=parseInt(db.settings.driveStart,10); return isNaN(v)?5:v; }
+function zoneBounds(){
+  const M=fieldMid(), L=M*2;
+  return [
+    {name:'Backed up',      lo:0,     hi:10},
+    {name:'Coming out',     lo:10,    hi:20},
+    {name:'Midline',        lo:20,    hi:M},
+    {name:'Green zone',     lo:M,     hi:L-12},
+    {name:'High red zone',  lo:L-12,  hi:L-7},
+    {name:'Low red zone',   lo:L-7,   hi:L+1}
+  ].filter(z=>z.hi>z.lo);   // a very short field can squeeze a band out of existence
+}
+function clampSpot(s){ return Math.max(0, Math.min(fieldLen(), Math.round(Number(s)||0))); }
+function zoneOf(spot){
+  if(spot==null||spot==='') return '';
+  const s=clampSpot(spot);
+  const z=zoneBounds().find(z=> s>=z.lo && s<z.hi);
+  return z? z.name : '';
+}
+/* Hudl writes own territory negative, opponent territory positive */
+function spotToYln(spot){
+  if(spot==null||spot==='') return '';
+  const M=fieldMid(), s=clampSpot(spot);
+  return s<M ? String(-s) : String(M*2-s);
+}
+function ylnToSpot(y){
+  if(y===''||y==null) return null;
+  const n=Number(y); if(isNaN(n)) return null;
+  if(n===0) return 0;                       // "0" reads as our own goal line, not theirs
+  const M=fieldMid();
+  return clampSpot(n<0 ? -n : M*2-Math.abs(n));
+}
+/* Group offensive plays into the field-position bands. XP snaps have no
+   meaningful field position, so they sit out. */
+function fieldGroups(arr){
+  const order=zoneBounds().map(z=>z.name), M={};
+  let untracked=0;
+  arr.forEach(p=>{
+    if(isXPplay(p)) return;
+    const s=ylnToSpot(p['YARD LN']);
+    const k=(s==null)?'':zoneOf(s);
+    if(!k){ untracked++; return; }
+    M[k]=M[k]||{n:0,yds:0,eA:0,eY:0,td:0};
+    M[k].n++; M[k].yds+=(parseInt(p['GN/LS'],10)||0);
+    if(/TD/.test(p['RESULT']||'')) M[k].td++;
+    if(p['EFF']==='Y'||p['EFF']==='N'){ M[k].eA++; if(p['EFF']==='Y') M[k].eY++; }
+  });
+  return {rows:order.filter(k=>M[k]).map(k=>({name:k,d:M[k]})), untracked:untracked};
+}
+function spotText(spot){
+  const M=fieldMid(), s=clampSpot(spot);
+  if(s===M) return 'midfield';
+  return s<M ? 'own '+s : 'opp '+(M*2-s);
+}
+
+// ---- field-position bar (the ±5 nudger under the situation card) ----
+let fbOpen=false;
+function renderFieldBar(){
+  const bar=$('fieldBar'), zones=$('fbZones');
+  if(!bar) return;
+  const on = db.settings.trackField!==false && cur.odk!=='D';
+  bar.style.display = on ? 'grid' : 'none';
+  if(!on){ zones.style.display='none'; return; }
+  const zn=zoneOf(cur.spot);
+  $('fbSpot').innerHTML = '<b>'+esc(spotText(cur.spot))+'</b><span>'+(zn?esc(zn):'&nbsp;')+'</span>';
+  zones.style.display = fbOpen ? 'flex' : 'none';
+  if(fbOpen){
+    const here=zoneOf(cur.spot);
+    chipRow(zones, zoneBounds().map(z=>({label:z.name, v:z})), o=>o.v.name===here, o=>{
+      cur.spot = clampSpot(Math.floor((o.v.lo+Math.min(o.v.hi,fieldLen()))/2));
+      fbOpen=false; renderFieldBar();
+    });
+  }
+}
+$('fbMinus').addEventListener('click',()=>{ cur.spot=clampSpot(cur.spot-5); renderFieldBar(); });
+$('fbPlus') .addEventListener('click',()=>{ cur.spot=clampSpot(cur.spot+5); renderFieldBar(); });
+$('fbSpot') .addEventListener('click',()=>{ fbOpen=!fbOpen; renderFieldBar(); });
+
 function xpMade(p){ return ['Complete','Complete, TD','TD'].includes(p['RESULT']); }
 function isXPplay(p){ return p['DN']==='0' || !!p['XP']; }
 /* XP rows for the "by down" tables: one per conversion type actually used */
@@ -803,6 +914,7 @@ function renderLog(){
   buildWheel(); syncWheel();
   // hide the whole down/distance block when the team isn't tracking it
   $('ddGrid').style.display = db.settings.trackDD ? 'grid' : 'none';
+  renderFieldBar();
 
   chipRow($('xpChips'), ['1P','2P'], v=>cur.xp===v, v=>{
     cur.xp=(cur.xp===v?'':v);
@@ -985,7 +1097,11 @@ function syncWheel(){
 $('gainMinus').addEventListener('click',()=>{cur.gain--;renderLog();});
 $('gainPlus').addEventListener('click',()=>{cur.gain++;renderLog();});
 $('inYac').addEventListener('input',e=>cur.yac=e.target.value);
-$('inYln').addEventListener('input',e=>cur.yln=e.target.value);
+$('inYln').addEventListener('input',e=>{
+  cur.yln=e.target.value;
+  const s=ylnToSpot(e.target.value);          // typing a yard line moves the tracked ball too
+  if(s!=null){ cur.spot=s; renderFieldBar(); }
+});
 
 $('btnQuickExport').addEventListener('click',quickExport);
 $('btnNudgeExport').addEventListener('click',quickExport);
@@ -1021,7 +1137,7 @@ $('btnSave').addEventListener('click',()=>{
   rec['RESULT']= r? r.result : '';
   rec['GN/LS']= String(cur.gain);
   rec['ODK']= isXP? 'O' : cur.odk;
-  rec['YARD LN']= cur.yln;
+  rec['YARD LN']= (db.settings.trackField===false) ? cur.yln : spotToYln(cur.spot);
   rec['SERIES']= String(g.series);
   rec['OFF FORM']= cur.offForm;
   rec['OFF PLAY']= cur.offPlay;
@@ -1060,11 +1176,14 @@ $('btnSave').addEventListener('click',()=>{
     else if(wasTD) pts = 6;
     if(pts){ if(cur.odk==='D') g.oppScore+=pts; else g.usScore+=pts; }
   }
-  const keep={odk:cur.odk, passer:cur.passer, offForm:cur.offForm, ltg:cur.ltg};
+  // the ball moves by whatever this play gained; a new possession goes back to the drive-start spot
+  const nextSpot = clampSpot(cur.spot + (parseInt(cur.gain,10)||0));
+  const keep={odk:cur.odk, passer:cur.passer, offForm:cur.offForm, ltg:cur.ltg, spot:nextSpot};
+  const fresh={...keep, spot:driveStart()};
   const distNum = (typeof cur.dist==='number');
   if(isXP){
     g.series++;
-    freshCur({...keep, dn:null, ltg:'MID'});
+    freshCur({...fresh, dn:null, ltg:'MID'});
     toast('XP logged — new series S'+g.series);
   } else if(wasTD){
     // TD always prompts the extra point, whether or not down/distance is tracked
@@ -1072,7 +1191,7 @@ $('btnSave').addEventListener('click',()=>{
     toast('TD! Now log the extra point');
   } else if(turnover){
     g.series++;
-    freshCur({...keep, dn:null, ltg:'MID'});
+    freshCur({...fresh, dn:null, ltg:'MID'});
     toast('Turnover — new series S'+g.series);
   } else if(cur.dn==null){
     // down left empty — keep the down empty, reset distance to the default
@@ -1080,7 +1199,7 @@ $('btnSave').addEventListener('click',()=>{
     toast('Play '+g.plays.length+' saved');
   } else if(cur.dn===4 && distNum && cur.gain<cur.dist){
     g.series++;
-    freshCur({...keep, dn:null, ltg:'MID'});
+    freshCur({...fresh, dn:null, ltg:'MID'});
     toast('Turnover on downs — new series S'+g.series);
   } else if(distNum && cur.gain>=cur.dist && cur.dist>0){
     freshCur({...keep, dn:1, dist:db.settings.defaultDist});
@@ -1375,6 +1494,19 @@ function renderStats(){
         html+=fold('byDown', 'By down', dbody);
       }
     }
+    const fg=fieldGroups(off);
+    if(fg.rows.length){
+      let fbody='';
+      fg.rows.forEach(r=>{
+        const d=r.d;
+        fbody+='<div class="playrow"><div class="desc"><div class="l1">'+esc(r.name)+'</div>'
+          +'<div class="l2">'+d.n+' play'+(d.n>1?'s':'')+' · '+(Math.round(10*d.yds/d.n)/10)+' yds/play · '+d.yds+' yds'
+          +(d.td?' · '+d.td+' TD':'')+'</div></div>'
+          +'<div class="gain">'+(d.eA?Math.round(100*d.eY/d.eA)+'%':'—')+'</div></div>';
+      });
+      if(fg.untracked) fbody+='<div class="l2" style="padding:4px 2px 0">'+fg.untracked+' play'+(fg.untracked>1?'s':'')+' with no yard line — not counted here.</div>';
+      html+=fold('byField', 'By field position'+covTag, fbody);
+    }
   }
 
   // ---- Defense breakdowns (ODK = D): lower opp efficiency = better ----
@@ -1509,6 +1641,11 @@ function statsModel(){
     xpr.forEach(x=>dRows.push([x.name, x.n, '—', x.pct+'%']));
     if(dRows.length) S.push({t:'By down', head:['Down','Plays','Yds/play','Eff%'], numFrom:1, rows:dRows,
       note: xpr.length? 'XP rows: Eff% = conversions made (Complete / TD = good).' : ''});
+    const fg=fieldGroups(off);
+    if(fg.rows.length) S.push({t:'By field position',
+      head:['Zone','Plays','Yds/play','Total yds','TD','Eff%'], numFrom:1,
+      rows:fg.rows.map(r=>[r.name, r.d.n, (r.d.yds/r.d.n).toFixed(1), r.d.yds, r.d.td, r.d.eA?pct(r.d.eY,r.d.eA):'—']),
+      note: fg.untracked ? (fg.untracked+' play(s) had no yard line and are not counted.') : ''});
   }
   if(def.length){
     const dYds=def.reduce((s,p)=>s+num(p['GN/LS']),0);
@@ -1602,6 +1739,8 @@ function renderTeam(){
   });
   $('inTeam').value=db.settings.team;
   $('inDefDist').value=db.settings.defaultDist;
+  $('inFieldLen').value=fieldLen();
+  $('inDriveStart').value=driveStart();
   const gCur=game();
   $('inOpponent').value = gCur? (gCur.opponent||'') : '';
   chipRow($('logModeToggle'), [{label:'Offense',v:'O'},{label:'Defense',v:'D'},{label:'Both',v:'B'}], o=>db.settings.logMode===o.v, o=>{
@@ -1614,6 +1753,9 @@ function renderTeam(){
   chipRow($('hapticToggle'), [{label:'On',v:true},{label:'Off',v:false}], o=>!!db.settings.haptics===o.v, o=>{ db.settings.haptics=o.v; save(); buzz(15); renderTeam(); });
   chipRow($('playOrderToggle'), [{label:'A–Z',v:'name'},{label:'Most used',v:'freq'}], o=>(db.settings.playOrder||'name')===o.v, o=>{
     db.settings.playOrder=o.v; save(); renderTeam(); renderLog();
+  });
+  chipRow($('fieldToggle'), [{label:'On',v:true},{label:'Off',v:false}], o=>(db.settings.trackField!==false)===o.v, o=>{
+    db.settings.trackField=o.v; save(); renderTeam(); renderLog();
   });
   chipRow($('ddToggle'), [{label:'On',v:true},{label:'Off',v:false}], o=>!!db.settings.trackDD===o.v, o=>{
     db.settings.trackDD=o.v;
@@ -1683,6 +1825,14 @@ function renderTeam(){
 $('gameSelect').addEventListener('change',e=>{ db.currentGameId=e.target.value; save(); freshCur(); renderLog(); renderTeam(); });
 $('inTeam').addEventListener('input',e=>{ db.settings.team=e.target.value; save(); });
 $('inDefDist').addEventListener('input',e=>{ db.settings.defaultDist=parseInt(e.target.value,10)||20; save(); });
+$('inFieldLen').addEventListener('input',e=>{
+  const L=parseInt(e.target.value,10);
+  if(L>=20){ db.settings.fieldMid=Math.round(L/2); if(cur) cur.spot=clampSpot(cur.spot); save(); renderLog(); }
+});
+$('inDriveStart').addEventListener('input',e=>{
+  const v=parseInt(e.target.value,10);
+  if(!isNaN(v)&&v>=0) { db.settings.driveStart=clampSpot(v); save(); }
+});
 $('inOpponent').addEventListener('input',e=>{ const g=game(); if(g){ g.opponent=e.target.value; save(); renderScore(); } });
 $('btnResetScore').addEventListener('click',()=>{ const g=game(); if(g){ g.usScore=0; g.oppScore=0; save(); renderScore(); toast('Score reset to 0–0'); } });
 $('btnAddPlayer').addEventListener('click',()=>{
@@ -1712,28 +1862,85 @@ $('btnDeleteGame').addEventListener('click',()=>{
 });
 
 /* ================= EXPORT ================= */
+/* The export tab picks any number of games. Hudl imports row-by-row into ONE
+   video, so separate files is the default — one file per game, ready to drop
+   on the matching film. The combined file is there for archiving. */
+let expSel=null, expMode='sep', expSeenGame=null;
+function expGameIds(){
+  const allIds=db.games.map(g=>g.id);
+  // a new game became the current one → point the picker at it
+  if(expSeenGame!==db.currentGameId){ expSeenGame=db.currentGameId; expSel=null; }
+  if(expSel===null){ expSel = db.currentGameId? [db.currentGameId] : allIds.slice(); }
+  expSel = expSel.filter(id=>allIds.includes(id));
+  return expSel;
+}
+function expGames(){ const s=expGameIds(); return db.games.filter(g=>s.includes(g.id)); }
 function renderExport(){
-  const sel=$('expGameSelect'); sel.innerHTML='';
+  const allIds=db.games.map(g=>g.id);
+  const sel=expGameIds();
+  const box=$('expGamesSel'); box.innerHTML='';
+  const allOn = allIds.length>0 && sel.length===allIds.length;
+  const allChip=el('button',{class:'chip sm'+(allOn?' on':''),type:'button'},'All games');
+  allChip.addEventListener('click',()=>{ expSel = allOn? (db.currentGameId?[db.currentGameId]:[]) : allIds.slice(); renderExport(); });
+  box.appendChild(allChip);
   db.games.forEach(g=>{
-    const o=el('option',{value:g.id},esc(g.name+' ('+g.plays.length+' plays)'));
-    if(g.id===db.currentGameId) o.selected=true;
-    sel.appendChild(o);
+    const on=sel.includes(g.id);
+    const c=el('button',{class:'chip sm'+(on?' on':''),type:'button'},
+      esc(g.name)+' ('+g.plays.filter(p=>!p._divider).length+')'+(g.status==='ended'?'':' •'));
+    c.addEventListener('click',()=>{ expSel = on? sel.filter(x=>x!==g.id) : [...sel,g.id]; renderExport(); });
+    box.appendChild(c);
   });
+  $('expGamesCount').textContent = db.games.length? '('+sel.length+' of '+db.games.length+')' : '';
+  chipRowStatic($('expModeSel'), [{label:'Separate files',v:'sep'},{label:'One combined file',v:'one'}],
+    o=>expMode===o.v, o=>{ expMode=o.v; renderExport(); });
+  $('expModeHint').textContent = expMode==='sep'
+    ? 'One CSV per game — what Hudl wants, since each file goes on its own film.'
+    : 'Every game in a single CSV, split by blank rows. Good for archiving, not for a Hudl import.';
   updateExpInfo();
 }
-function updateExpInfo(){
-  const g=db.games.find(x=>x.id===$('expGameSelect').value);
-  $('expInfo').textContent = g? g.plays.length+' plays · columns: '+COLS.length+' (matches your Hudl layout)' : '';
+/* like chipRow, but doesn't drag renderLog() along with it */
+function chipRowStatic(container, values, isOn, onTap){
+  container.innerHTML='';
+  values.forEach(v=>{
+    const c=el('button',{class:'chip sm'+(isOn(v)?' on':''),type:'button'}, esc(typeof v==='object'?v.label:v));
+    c.addEventListener('click',()=>{ buzz(8); onTap(v); });
+    container.appendChild(c);
+  });
 }
-$('expGameSelect').addEventListener('change',updateExpInfo);
+function updateExpInfo(){
+  const gs=expGames();
+  const n=gs.reduce((s,g)=>s+g.plays.filter(p=>!p._divider).length,0);
+  if(!gs.length){ $('expInfo').textContent='Pick at least one game above.'; return; }
+  const files = (gs.length>1 && expMode==='sep') ? gs.length+' files' : '1 file';
+  $('expInfo').textContent = gs.length+' game'+(gs.length>1?'s':'')+' · '+n+' plays · '+files
+    +' · columns: '+COLS.length+' (matches your Hudl layout)';
+}
 function csvFor(g){
   const q=v=>{ v=String(v==null?'':v); return /[",\n\r]/.test(v)? '"'+v.replace(/"/g,'""')+'"' : v; };
   const lines=[COLS.join(',')];
   g.plays.forEach(p=>lines.push(COLS.map(c=>q(p[c])).join(',')));
   return '﻿'+lines.join('\r\n');
 }
+/* one file, every game, a blank row between them (PLAY # restarts per game) */
+function csvForGames(gs){
+  const q=v=>{ v=String(v==null?'':v); return /[",\n\r]/.test(v)? '"'+v.replace(/"/g,'""')+'"' : v; };
+  const blank=COLS.map(()=>'').join(',');
+  const lines=[COLS.join(',')];
+  gs.forEach((g,i)=>{
+    if(i) lines.push(blank);
+    g.plays.forEach(p=>lines.push(COLS.map(c=>q(p[c])).join(',')));
+  });
+  return '﻿'+lines.join('\r\n');
+}
 function csvName(g){
   return (db.settings.team+'_'+g.name).replace(/[^\w\-]+/g,'_')+'_hudl.csv';
+}
+function csvNameAll(gs){
+  return (db.settings.team+'_'+gs.length+'_games_'+todayStr()).replace(/[^\w\-]+/g,'_')+'_hudl.csv';
+}
+function markExported(gs){
+  gs.forEach(g=>{ g.lastExport=g.plays.length; });
+  nudgeSnooze=false; save();
 }
 function download(name, text, type){
   const blob=new Blob([text],{type:type||'text/csv;charset=utf-8'});
@@ -1764,18 +1971,49 @@ async function shareFile(name, text, type){
   toast('Sharing not available here — downloaded instead');
   return false;
 }
-$('btnExportCsv').addEventListener('click',()=>{
-  const g=db.games.find(x=>x.id===$('expGameSelect').value);
-  if(!g||!g.plays.length){ toast('No plays to export'); return; }
-  download(csvName(g), csvFor(g));
-  g.lastExport=g.plays.length; nudgeSnooze=false; save();
-  toast('CSV downloaded');
+/* several files in one share sheet; falls back to one download after another */
+async function shareFiles(items, type){
+  const mime = type||'text/csv';
+  let files=null;
+  try{ files=items.map(it=>new File([it.text], it.name, {type:mime})); }catch(e){}
+  if(files && SHARE_OK && navigator.canShare({files:files})){
+    try{ await navigator.share({files:files, title:files.length+' games'}); return true; }
+    catch(e){ if(e && e.name==='AbortError') return false; }
+  }
+  for(let i=0;i<items.length;i++){
+    download(items[i].name, items[i].text, mime);
+    if(i<items.length-1) await new Promise(r=>setTimeout(r,700));
+  }
+  toast('Shared one at a time — '+items.length+' files downloaded');
+  return true;
+}
+/* what the current picker adds up to: [{name, text, game}] */
+function exportBundle(){
+  const gs=expGames().filter(g=>g.plays.length);
+  if(!gs.length) return null;
+  if(gs.length===1 || expMode==='one'){
+    const name = gs.length===1 ? csvName(gs[0]) : csvNameAll(gs);
+    return {games:gs, files:[{name:name, text:(gs.length===1? csvFor(gs[0]) : csvForGames(gs))}]};
+  }
+  return {games:gs, files:gs.map(g=>({name:csvName(g), text:csvFor(g)}))};
+}
+$('btnExportCsv').addEventListener('click',async()=>{
+  const b=exportBundle();
+  if(!b){ toast('No plays to export'); return; }
+  for(let i=0;i<b.files.length;i++){
+    download(b.files[i].name, b.files[i].text);
+    if(i<b.files.length-1) await new Promise(r=>setTimeout(r,700));   // browsers choke on a burst
+  }
+  markExported(b.games);
+  toast(b.files.length>1 ? b.files.length+' CSVs downloaded' : 'CSV downloaded');
 });
 $('btnShareCsv').addEventListener('click',async()=>{
-  const g=db.games.find(x=>x.id===$('expGameSelect').value);
-  if(!g||!g.plays.length){ toast('No plays to export'); return; }
-  const ok=await shareFile(csvName(g), csvFor(g), 'text/csv');
-  if(ok){ g.lastExport=g.plays.length; nudgeSnooze=false; save(); }
+  const b=exportBundle();
+  if(!b){ toast('No plays to export'); return; }
+  const ok = b.files.length===1
+    ? await shareFile(b.files[0].name, b.files[0].text, 'text/csv')
+    : await shareFiles(b.files, 'text/csv');
+  if(ok) markExported(b.games);
 });
 $('btnShareStats').addEventListener('click',async()=>{
   const t=statsCsvText();
