@@ -389,7 +389,8 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
       <button class="btn sec" id="btnExportStats">⬇️ CSV</button>
       <button class="btn sec" id="btnExportStatsPdf">🧾 PDF</button>
     </div>
-    <div class="muted">PDF opens your device’s print sheet — choose “Save as PDF”.</div>
+    <button class="btn sec" id="btnShareStats" data-share style="margin-top:8px">📤 Send stats to Drive / share…</button>
+    <div class="muted">PDF opens your device’s print sheet. To land it in Drive: on Android pick <b>Save to Google Drive</b> as the printer, on iPhone choose <b>Save as PDF</b> then the share icon → Drive.</div>
   </div>
   <div id="statsBody"></div>
 </section>
@@ -462,7 +463,7 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
     <select id="expGameSelect"></select>
     <div class="muted" id="expInfo" style="margin:8px 0"></div>
     <button class="btn" id="btnExportCsv">⬇️ Download Hudl CSV</button>
-    <button class="btn sec" id="btnShareCsv">📤 Share CSV…</button>
+    <button class="btn sec" id="btnShareCsv" data-share>📤 Send to Drive / share…</button>
     <div class="muted" style="margin-top:8px">
       Import in Hudl: open the game video → <b>Data</b> → <b>Import Data</b> → upload this CSV.
       Column names match your existing Hudl breakdown (DN, DIST, PLAY TYPE, RESULT, GN/LS, ODK, …).
@@ -471,9 +472,10 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
   <h3>Backup</h3>
   <div class="card">
     <button class="btn sec" id="btnBackup">⬇️ Backup everything (JSON)</button>
+    <button class="btn sec" id="btnShareBackup" data-share>📤 Send backup to Drive / share…</button>
     <button class="btn sec" id="btnRestore">⬆️ Restore backup</button>
     <input type="file" id="fileRestore" accept=".json" style="display:none">
-    <div class="muted">Use backup/restore to move all games & settings between phone, tablet and laptop.</div>
+    <div class="muted">Use backup/restore to move all games & settings between phone, tablet and laptop. The backup contains your roster and play calls — keep it somewhere private.</div>
   </div>
   <h3>Team file (private roster &amp; playbook)</h3>
   <div class="card">
@@ -1531,9 +1533,9 @@ function statsModel(){
   return {games:games, sections:S};
 }
 
-function exportStats(){
+function statsCsvText(){
   const m=statsModel();
-  if(!m){ toast('No plays in the selected game(s)'); return; }
+  if(!m) return null;
   const q=v=>{ v=String(v==null?'':v); return /[",\n\r]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
   const rows=[]; const line=(...a)=>rows.push(a.map(q).join(','));
   line('SAF Play Logger — Stats');
@@ -1547,7 +1549,13 @@ function exportStats(){
     if(s.note) line(s.note);
     line('');
   });
-  download('SAF_stats_'+todayStr()+'.csv', '﻿'+rows.join('\r\n'));
+  return '﻿'+rows.join('\r\n');
+}
+function statsCsvName(){ return (db.settings.team||'SAF')+'_stats_'+todayStr()+'.csv'; }
+function exportStats(){
+  const t=statsCsvText();
+  if(t==null){ toast('No plays in the selected game(s)'); return; }
+  download(statsCsvName(), t);
   toast('Stats CSV downloaded');
 }
 
@@ -1733,6 +1741,29 @@ function download(name, text, type){
   document.body.appendChild(a); a.click();
   setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},500);
 }
+
+/* ---------- Share sheet: save to Drive, mail it, send it to a teammate ----------
+   Hands the file to the phone's own share panel. No account, no network, no
+   Google anything in this app — the OS does the talking. Desktop browsers that
+   can't share files never see the buttons; they keep the plain download. */
+const SHARE_OK = (function(){
+  try{
+    if(!navigator.share || !navigator.canShare || typeof File!=='function') return false;
+    return navigator.canShare({files:[new File(['x'],'t.txt',{type:'text/plain'})]});
+  }catch(e){ return false; }
+})();
+async function shareFile(name, text, type){
+  const mime = type||'text/csv';
+  let file=null;
+  try{ file=new File([text], name, {type:mime}); }catch(e){}
+  if(file && SHARE_OK && navigator.canShare({files:[file]})){
+    try{ await navigator.share({files:[file], title:name}); return true; }
+    catch(e){ if(e && e.name==='AbortError') return false; }   // user backed out — say nothing
+  }
+  download(name, text, mime);
+  toast('Sharing not available here — downloaded instead');
+  return false;
+}
 $('btnExportCsv').addEventListener('click',()=>{
   const g=db.games.find(x=>x.id===$('expGameSelect').value);
   if(!g||!g.plays.length){ toast('No plays to export'); return; }
@@ -1743,13 +1774,20 @@ $('btnExportCsv').addEventListener('click',()=>{
 $('btnShareCsv').addEventListener('click',async()=>{
   const g=db.games.find(x=>x.id===$('expGameSelect').value);
   if(!g||!g.plays.length){ toast('No plays to export'); return; }
-  const file=new File([csvFor(g)], csvName(g), {type:'text/csv'});
-  if(navigator.canShare && navigator.canShare({files:[file]})){
-    try{ await navigator.share({files:[file], title:csvName(g)}); }catch(e){}
-  } else { download(csvName(g), csvFor(g)); toast('Sharing not supported — downloaded instead'); }
+  const ok=await shareFile(csvName(g), csvFor(g), 'text/csv');
+  if(ok){ g.lastExport=g.plays.length; nudgeSnooze=false; save(); }
 });
+$('btnShareStats').addEventListener('click',async()=>{
+  const t=statsCsvText();
+  if(t==null){ toast('No plays in the selected game(s)'); return; }
+  await shareFile(statsCsvName(), t, 'text/csv');
+});
+function backupName(){ return 'flaglog_backup_'+new Date().toISOString().slice(0,10)+'.json'; }
 $('btnBackup').addEventListener('click',()=>{
-  download('flaglog_backup_'+new Date().toISOString().slice(0,10)+'.json', JSON.stringify(db,null,1), 'application/json');
+  download(backupName(), JSON.stringify(db,null,1), 'application/json');
+});
+$('btnShareBackup').addEventListener('click',async()=>{
+  await shareFile(backupName(), JSON.stringify(db,null,1), 'application/json');
 });
 $('btnRestore').addEventListener('click',()=>$('fileRestore').click());
 $('fileRestore').addEventListener('change',e=>{
@@ -1900,13 +1938,12 @@ $('btnStaleNew').addEventListener('click',newGameFlow);
 (function startUp(){
   applyTheme();
   renderLockStatus();
+  if(!SHARE_OK) document.querySelectorAll('[data-share]').forEach(b=>b.style.display='none');
   if(hadSavedData){ bootApp(); return; }             // returning device — data already stored locally
   if(PRESET_PLAIN){ applyPresets(PRESET_PLAIN); bootApp(); return; }   // master copy with data built in
   showSyncGate();                                     // public copy, fresh device — pull the team file
 })();
 </script>
-<script>
-if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{})); }
-</script>
+<script>if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));}</script>
 </body>
 </html>
