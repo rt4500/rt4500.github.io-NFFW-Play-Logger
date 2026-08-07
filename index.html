@@ -610,6 +610,17 @@ function load(){
     if(typeof g.opponent!=='string') g.opponent='';
   });
   d._mig = d._mig || {};
+  // Hudl's breakdown calls these columns PASSER and RECEIVER, and has no
+  // jersey columns. Rename them on games logged before that was fixed.
+  if(!d._mig.passerNames){
+    (d.games||[]).forEach(g=>(g.plays||[]).forEach(p=>{
+      if(p['PASSER_Name']!==undefined && !p['PASSER']) p['PASSER']=p['PASSER_Name'];
+      if(p['RECEIVER_Name']!==undefined && !p['RECEIVER']) p['RECEIVER']=p['RECEIVER_Name'];
+      delete p['PASSER_Name']; delete p['RECEIVER_Name'];
+      delete p['PASSER_Jersey']; delete p['RECEIVER_Jersey'];
+    }));
+    d._mig.passerNames=1;
+  }
   if(!Array.isArray(d.roster)) d.roster = [];
   return d;
 }
@@ -1112,17 +1123,16 @@ $('btnRepeat').addEventListener('click',()=>{
   if(p['OFF FORM']) cur.offForm=p['OFF FORM'];
   cur.offPlay=p['OFF PLAY']||'';
   cur.front=p['DEF FRONT']||''; cur.blitz=p['BLITZ']||''; cur.cov=p['COVERAGE']||''; cur.bdir=p['BLITZ DIR']||'';
-  if(p['PASSER_Name']) cur.passer=p['PASSER_Name'];
+  if(p['PASSER']) cur.passer=p['PASSER'];
   if(p['LINE TO GAIN']) cur.ltg=p['LINE TO GAIN'];
   renderLog(); toast('Copied last play call — set the result');
   window.scrollTo({top:0,behavior:'smooth'});
 });
 
 /* ================= Save play ================= */
-const COLS=['DN','DIST','PLAY TYPE','RESULT','GN/LS','ODK','YARD LN','SERIES','OFF FORM','OFF PLAY','DEF FRONT','BLITZ','COVERAGE','TEAM','PLAY #','PASSER_Jersey','PASSER_Name','RECEIVER_Jersey','RECEIVER_Name','EFF','RESULT W','BLITZ DIR','TARGET ZONE','YAC','PLAY TYPE W','D-AUDIBLE 1','D-AUDIBLE 2','LINE TO GAIN','XP'];
+const COLS=['DN','DIST','PLAY TYPE','RESULT','GN/LS','ODK','YARD LN','SERIES','OFF FORM','OFF PLAY','DEF FRONT','BLITZ','COVERAGE','TEAM','PLAY #','PASSER','RECEIVER','EFF','RESULT W','BLITZ DIR','TARGET ZONE','YAC','PLAY TYPE W','D-AUDIBLE 1','D-AUDIBLE 2','LINE TO GAIN','XP'];
 let lastSnapshot=null;
 
-function jerseyOf(name){ const p=db.roster.find(r=>r.name===name); return p? p.jersey : ''; }
 
 $('btnSave').addEventListener('click',()=>{
   const g=activeGame();
@@ -1146,10 +1156,8 @@ $('btnSave').addEventListener('click',()=>{
   rec['COVERAGE']= cur.cov;
   rec['TEAM']= db.settings.team;
   rec['PLAY #']= String(g.plays.filter(pp=>!pp._divider).length+1);
-  rec['PASSER_Jersey']= jerseyOf(cur.passer);
-  rec['PASSER_Name']= cur.passer;
-  rec['RECEIVER_Jersey']= jerseyOf(cur.receiver);
-  rec['RECEIVER_Name']= cur.receiver;
+  rec['PASSER']= cur.passer;
+  rec['RECEIVER']= cur.receiver;
   rec['EFF']= cur.eff;
   rec['RESULT W']= r? r.rw : '';
   rec['BLITZ DIR']= cur.bdir;
@@ -1261,7 +1269,7 @@ document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()
 /* ================= PLAYS list & edit ================= */
 function playSummary(p){
   const dn = p['DN']==='0' ? 'XP'+(p['XP']?' '+p['XP']:'') : (p['DN'] ? p['DN']+'&'+p['DIST'] : '');
-  const who = [p['PASSER_Name'], p['RECEIVER_Name']].filter(Boolean).join(' → ');
+  const who = [p['PASSER'], p['RECEIVER']].filter(Boolean).join(' → ');
   return {
     l1: [dn, p['OFF FORM'], p['OFF PLAY']].filter(Boolean).join(' · '),
     l2: [p['RESULT'], who, [p['DEF FRONT'],p['BLITZ'],p['COVERAGE']].filter(Boolean).join('/')].filter(Boolean).join(' · ')
@@ -1312,8 +1320,8 @@ function openEdit(idx){
     + selHtml('DEF FRONT',db.lists.fronts,p['DEF FRONT']) + selHtml('BLITZ',db.lists.blitzes,p['BLITZ'])
     + selHtml('COVERAGE',db.lists.coverages,p['COVERAGE']) + inpHtml('TEAM',p['TEAM'])
     + inpHtml('PLAY #',p['PLAY #'])
-    + selHtml('PASSER_Name',names,p['PASSER_Name']) + inpHtml('PASSER_Jersey',p['PASSER_Jersey'])
-    + selHtml('RECEIVER_Name',names,p['RECEIVER_Name']) + inpHtml('RECEIVER_Jersey',p['RECEIVER_Jersey'])
+    + selHtml('PASSER',names,p['PASSER'])
+    + selHtml('RECEIVER',names,p['RECEIVER'])
     + selHtml('EFF',['Y','N'],p['EFF'])
     + selHtml('RESULT W',['COMPLETION','INCOMPLETION','DROPPED','TIPPED (BLITZ)','RUN','SACK','INTERCEPTION','FUMBLE','PENALTY'],p['RESULT W'])
     + selHtml('BLITZ DIR',['LEFT','MIDDLE','RIGHT'],p['BLITZ DIR'])
@@ -1527,7 +1535,7 @@ function renderStats(){
 
   const passers={};
   passes.forEach(p=>{
-    const n=p['PASSER_Name']; if(!n) return;
+    const n=p['PASSER']; if(!n) return;
     passers[n]=passers[n]||{att:0,cmp:0,yds:0,td:0,int:0};
     passers[n].att++;
     if(['Complete','Complete, TD','TD'].includes(p['RESULT'])){ passers[n].cmp++; passers[n].yds+=num(p['GN/LS']); }
@@ -1550,7 +1558,7 @@ function renderStats(){
   // Receiver / target stats — uses the receiver already logged on each play
   const recv={};
   passes.forEach(p=>{
-    const n=p['RECEIVER_Name']; if(!n) return;
+    const n=p['RECEIVER']; if(!n) return;
     recv[n]=recv[n]||{tgt:0,rec:0,yds:0,td:0,drop:0};
     recv[n].tgt++;
     const caught=['Complete','Complete, TD','TD'].includes(p['RESULT']);
@@ -1604,7 +1612,7 @@ function statsModel(){
       ['Efficient %',pct(effP.filter(p=>p['EFF']==='Y').length,effP.length)]
     ]});
     const P={};
-    passesO.forEach(p=>{ const n=p['PASSER_Name']; if(!n)return; P[n]=P[n]||{att:0,cmp:0,yds:0,td:0,int:0}; P[n].att++;
+    passesO.forEach(p=>{ const n=p['PASSER']; if(!n)return; P[n]=P[n]||{att:0,cmp:0,yds:0,td:0,int:0}; P[n].att++;
       if(['Complete','Complete, TD','TD'].includes(p['RESULT'])){P[n].cmp++;P[n].yds+=num(p['GN/LS']);}
       if(/TD/.test(p['RESULT']))P[n].td++; if(p['RESULT']==='Interception')P[n].int++; });
     const prRows=Object.entries(P).sort((a,b)=>passerRating(b[1])-passerRating(a[1]))
@@ -1612,7 +1620,7 @@ function statsModel(){
     if(prRows.length) S.push({t:'Passers', head:['Name','Att','Cmp','Cmp%','Yds','Y/A','TD','INT','Rating'], numFrom:1, rows:prRows,
       note:'Rating = NFL passer rating (0–158.3).'});
     const R={};
-    passesO.forEach(p=>{ const n=p['RECEIVER_Name']; if(!n)return; R[n]=R[n]||{tgt:0,rec:0,yds:0,td:0,drop:0}; R[n].tgt++;
+    passesO.forEach(p=>{ const n=p['RECEIVER']; if(!n)return; R[n]=R[n]||{tgt:0,rec:0,yds:0,td:0,drop:0}; R[n].tgt++;
       if(['Complete','Complete, TD','TD'].includes(p['RESULT'])){R[n].rec++;R[n].yds+=num(p['GN/LS']);}
       if(/TD/.test(p['RESULT']))R[n].td++; if(p['RESULT W']==='DROPPED')R[n].drop++; });
     const rrRows=Object.entries(R).sort((a,b)=>b[1].rec-a[1].rec||b[1].tgt-a[1].tgt)
