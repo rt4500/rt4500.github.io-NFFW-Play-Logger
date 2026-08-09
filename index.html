@@ -247,7 +247,6 @@ nav button.on{color:var(--accent);}
 .finding.info .dot{background:var(--accent);}
 .finding .t{font-weight:800; font-size:.98rem;}
 .finding .d{color:var(--ink2); font-size:.88rem; margin-top:1px;}
-.airesp{white-space:pre-wrap; line-height:1.5; font-size:.97rem;}
 [data-bright="2"] .finding{border-bottom:2px solid #000;}
 .scouthead{display:flex; gap:12px; align-items:center; padding:10px 2px 12px; border-bottom:1px solid var(--line); margin-bottom:6px;}
 .scouthead .idx{font-size:2rem; font-weight:900; color:var(--accent); line-height:1;}
@@ -532,18 +531,16 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
       <div class="l2" id="coachSub"></div>
     </div></div>
     <div id="coachBody"></div>
-    <div class="btnpair" style="margin-top:10px">
-      <button class="btn sec" id="btnBriefing">📋 Copy briefing for Claude</button>
-      <button class="btn sec" id="btnAskAI">✨ Ask Claude</button>
-    </div>
+    <button class="btn" id="btnOpenClaude" style="margin-top:10px">💬 Open in Claude</button>
+    <button class="btn sec" id="btnBriefing" style="margin-top:8px">📋 Copy briefing</button>
     <div class="muted" id="coachNote"></div>
   </div>
   <div id="statsBody"></div>
 </section>
 
-<div class="modal" id="aiModal"><div class="sheet" id="aiSheet">
-  <h2 id="aiTitle">Claude <button class="x" id="aiX">✕</button></h2>
-  <div id="aiBody"></div>
+<div class="modal" id="noticeModal"><div class="sheet" id="noticeSheet">
+  <h2 id="noticeTitle"> <button class="x" id="noticeX">✕</button></h2>
+  <div id="noticeBody"></div>
 </div></div>
 
 <!-- ============ TEAM / SETUP ============ -->
@@ -620,15 +617,12 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
     </div>
     <div class="muted">Everyone can be picked as passer (trick plays). Tap QB to mark your usual passers — they show first while logging. ✕ removes.</div>
   </div>
-  <h3>AI feedback (optional)</h3>
+  <h3>Claude</h3>
   <div class="card">
-    <div class="muted">The assistant coach on the Stats tab already runs on this device with no network. This is only for the “Ask Claude” button, which sends the same briefing — including play call and player names — to Anthropic’s API and shows the answer. Leave it empty and nothing is ever sent.</div>
-    <label class="f" style="margin-top:12px">ANTHROPIC API KEY</label>
-    <input type="password" id="inAiKey" placeholder="sk-ant-…" autocomplete="off">
-    <div class="muted" id="aiKeyState"></div>
-    <label class="f" style="margin-top:12px">MODEL</label>
-    <div class="chips" id="aiModelSel"></div>
-    <div class="muted">The key is stored on this device only and deliberately kept out of backup files, so sharing a backup never shares your key. Anyone with the tablet could read it — don’t put a key on a shared device.</div>
+    <div class="muted">The assistant coach on the Stats tab works out its findings on this device with no network. <b>Open in Claude</b> hands the same briefing to the Claude app for a deeper read — that uses your normal subscription.</div>
+    <label class="f" style="margin-top:12px">CLAUDE PROJECT LINK (optional)</label>
+    <input type="text" id="inClaudeProject" placeholder="https://claude.ai/project/…" autocomplete="off">
+    <div class="muted" id="projState"></div>
   </div>
   <h3>Playbook & value lists</h3>
   <div class="card listedit" id="listsEditor"></div>
@@ -2466,10 +2460,10 @@ function renderCoach(){
           +esc(f.title)+'</div><div class="d">'+esc(f.detail)+'</div></div></div>').join('')
       : '<div class="muted">Nothing stands out — no call, down or zone is far enough off your normal to flag.</div>';
   }
-  $('coachNote').textContent = aiKey()
-    ? 'Runs on the device. “Ask Claude” sends the same briefing to the API using your key.'
-    : 'Runs on the device, no network needed. “Ask Claude” needs an API key on the Team tab.';
-  $('btnAskAI').style.display = aiKey()? 'block':'none';
+  $('coachNote').textContent = 'Findings above are worked out on this device, no network needed. '
+    + (projectId()
+        ? 'Open in Claude copies the briefing and opens your project.'
+        : 'Open in Claude starts a chat with the briefing already filled in.');
 }
 
 /* ---- briefing: the same numbers, written for a model to read ---- */
@@ -2570,61 +2564,49 @@ async function copyBriefing(){
   }
 }
 
-/* ---- optional: ask Claude directly ----
-   The key is kept OUTSIDE db on purpose, so it can never ride along in a
-   backup file that gets shared with a team-mate. */
-const AI_KEY='safFlagAiKey';
-function aiKey(){ try{ return localStorage.getItem(AI_KEY)||''; }catch(e){ return ''; } }
-function setAiKey(v){ try{ v? localStorage.setItem(AI_KEY,v) : localStorage.removeItem(AI_KEY); }catch(e){} }
-function aiModel(){ return db.settings.aiModel || 'claude-haiku-4-5'; }
-function openAI(html, title){
-  $('aiTitle').firstChild.textContent = (title||'Claude')+' ';
-  $('aiBody').innerHTML = html;
-  $('aiModal').classList.add('open');
+/* ---- a small notice dialog (used by the recovery message) ---- */
+function openNotice(html, title){
+  $('noticeTitle').firstChild.textContent = (title||'')+' ';
+  $('noticeBody').innerHTML = html;
+  $('noticeModal').classList.add('open');
 }
-async function askClaude(){
-  const key=aiKey();
-  if(!key){ toast('Add an API key on the Team tab first'); return; }
+$('noticeX').addEventListener('click',()=>$('noticeModal').classList.remove('open'));
+$('noticeModal').addEventListener('click',e=>{ if(e.target===$('noticeModal')) $('noticeModal').classList.remove('open'); });
+
+/* ---- hand it to the Claude app ----
+   A link can prefill a new chat, and a link can open a project, but not both:
+   the project URL takes no prompt. So with a project set we copy and open it,
+   and without one we prefill a fresh chat. */
+const CLAUDE_URL_MAX = 12000;        // desktop truncates around 14k; leave headroom
+function projectId(){
+  const raw=(db.settings.claudeProject||'').trim();
+  const m=raw.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  return m? m[0] : '';
+}
+async function openInClaude(){
   const t=briefingText();
-  if(!t){ toast('No plays to analyse'); return; }
-  openAI('<div class="muted">Asking '+esc(aiModel())+'… this takes a few seconds.</div>', 'Claude');
-  try{
-    const res=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{
-        'content-type':'application/json',
-        'x-api-key':key,
-        'anthropic-version':'2023-06-01',
-        'anthropic-dangerous-direct-browser-access':'true'
-      },
-      body:JSON.stringify({model:aiModel(), max_tokens:1500, messages:[{role:'user',content:t}]})
-    });
-    if(!res.ok){
-      let msg='HTTP '+res.status;
-      try{ const j=await res.json(); if(j.error&&j.error.message) msg=j.error.message; }catch(e){}
-      if(res.status===401) msg='That API key was rejected. Check it on the Team tab.';
-      if(res.status===429) msg='Rate limited or out of credit — try again shortly.';
-      openAI('<div class="l2" style="color:var(--bad)">'+esc(msg)+'</div>'
-        +'<div class="muted" style="margin-top:8px">The briefing is still on your device — use “Copy briefing” and paste it into Claude instead.</div>','Couldn’t ask Claude');
-      return;
-    }
-    const j=await res.json();
-    const text=(j.content||[]).filter(c=>c.type==='text').map(c=>c.text).join('\n').trim();
-    const u=j.usage||{};
-    openAI('<div class="airesp">'+esc(text||'(no answer came back)')+'</div>'
-      +'<div class="muted" style="margin-top:12px">'+esc(aiModel())+' · '
-      +(u.input_tokens||0)+' in / '+(u.output_tokens||0)+' out tokens</div>', 'Claude on '+
-      (coachGames().focus.length===1? coachGames().focus[0].name : 'your games'));
-  }catch(err){
-    openAI('<div class="l2" style="color:var(--bad)">No answer — most likely no signal.</div>'
-      +'<div class="muted" style="margin-top:8px">'+esc(String(err.message||err))+'</div>'
-      +'<div class="muted" style="margin-top:8px">Everything else in the app works offline. Use “Copy briefing” now and paste it into Claude when you have a connection.</div>','Couldn’t reach Claude');
+  if(!t){ toast('No plays to brief on'); return; }
+  const pid=projectId();
+  if(pid){
+    let copied=true;
+    try{ await navigator.clipboard.writeText(t); }catch(e){ copied=false; }
+    window.open('https://claude.ai/project/'+pid, '_blank', 'noopener');
+    toast(copied ? 'Briefing copied — start a chat in your project and paste'
+                 : 'Project opened — use “Copy briefing” then paste');
+    return;
   }
+  const url='https://claude.ai/new?q='+encodeURIComponent(t);
+  if(url.length>CLAUDE_URL_MAX){
+    // too long to travel in a link — hand it over the clipboard instead
+    try{ await navigator.clipboard.writeText(t); }catch(e){}
+    window.open('https://claude.ai/new', '_blank', 'noopener');
+    toast('Briefing was too long for a link — copied instead, just paste');
+    return;
+  }
+  window.open(url, '_blank', 'noopener');
 }
+$('btnOpenClaude').addEventListener('click',openInClaude);
 $('btnBriefing').addEventListener('click',copyBriefing);
-$('btnAskAI').addEventListener('click',askClaude);
-$('aiX').addEventListener('click',()=>$('aiModal').classList.remove('open'));
-$('aiModal').addEventListener('click',e=>{ if(e.target===$('aiModal')) $('aiModal').classList.remove('open'); });
 
 function statsModel(){
   const plays=selectedPlays();
@@ -2823,13 +2805,10 @@ function renderTeam(){
   chipRow($('playOrderToggle'), [{label:'A–Z',v:'name'},{label:'Most used',v:'freq'}], o=>(db.settings.playOrder||'name')===o.v, o=>{
     db.settings.playOrder=o.v; save(); renderTeam(); renderLog();
   });
-  $('inAiKey').value = aiKey();
-  $('aiKeyState').textContent = aiKey()
-    ? 'Key saved on this device — “Ask Claude” is enabled on the Stats tab.'
-    : 'No key — the offline assistant coach still works.';
-  chipRowStatic($('aiModelSel'),
-    [{label:'Haiku (cheapest)',v:'claude-haiku-4-5'},{label:'Sonnet',v:'claude-sonnet-5'},{label:'Opus',v:'claude-opus-5'}],
-    o=>aiModel()===o.v, o=>{ db.settings.aiModel=o.v; save(); renderTeam(); });
+  $('inClaudeProject').value = db.settings.claudeProject||'';
+  $('projState').textContent = projectId()
+    ? 'Set — “Open in Claude” copies the briefing and opens your project, ready to paste.'
+    : 'Empty — “Open in Claude” opens a new chat with the briefing already typed in. Paste a project link here to land in that project instead (a project link can’t carry the text, so it gets copied for you).';
   chipRow($('oppMarkerToggle'), [{label:'On',v:true},{label:'Off',v:false}], o=>(db.settings.oppMarker!==false)===o.v, o=>{
     db.settings.oppMarker=o.v; save(); renderTeam(); renderLog();
   });
@@ -2910,8 +2889,8 @@ function renderTeam(){
 $('gameSelect').addEventListener('change',e=>{ db.currentGameId=e.target.value; save(); freshCur(); renderLog(); renderTeam(); });
 $('inTeam').addEventListener('input',e=>{ db.settings.team=e.target.value; save(); });
 $('inDefDist').addEventListener('input',e=>{ db.settings.defaultDist=parseInt(e.target.value,10)||20; save(); });
-$('inAiKey').addEventListener('input',e=>{ setAiKey(e.target.value.trim()); renderCoach(); });
-$('inAiKey').addEventListener('change',()=>renderTeam());
+$('inClaudeProject').addEventListener('input',e=>{ db.settings.claudeProject=e.target.value.trim(); save(); renderCoach(); });
+$('inClaudeProject').addEventListener('change',()=>renderTeam());
 $('inFieldLen').addEventListener('input',e=>{
   const L=parseInt(e.target.value,10);
   if(L>=20){ db.settings.fieldMid=Math.round(L/2); if(cur) cur.spot=clampSpot(cur.spot); save(); renderLog(); }
@@ -3566,7 +3545,7 @@ async function tryVaultRecovery(){
   save();
   bootApp();
   setTimeout(()=>{
-    openAI('<div class="l1" style="font-weight:800;margin-bottom:6px">Your data was restored from this device’s backup copy.</div>'
+    openNotice('<div class="l1" style="font-weight:800;margin-bottom:6px">Your data was restored from this device’s backup copy.</div>'
       +'<div class="l2">'+m.games+' game(s), '+m.plays+' plays, last saved '+ago(m.at)+'.</div>'
       +'<div class="muted" style="margin-top:10px">The browser had lost the main copy — that happens when a site moves, storage is cleared, or the browser reclaims space. Nothing was lost because a second copy is kept here automatically.</div>'
       +'<div class="muted" style="margin-top:10px"><b>Take a backup file now</b> from the Export tab so there is a copy off this device too.</div>', 'Recovered');
