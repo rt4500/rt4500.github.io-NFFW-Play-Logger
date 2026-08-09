@@ -222,6 +222,19 @@ nav button.on{color:var(--accent);}
 @media(min-width:700px){.modal{align-items:center;} .sheet{border-radius:18px; max-height:86vh;}}
 .sheet h2{margin:4px 0 10px; display:flex; align-items:center;}
 .sheet h2 .x{margin-left:auto; background:var(--surface); border:none; border-radius:10px; font-size:1.2rem; padding:8px 14px; color:var(--ink);}
+.safety{border-radius:12px; padding:10px 12px; margin-bottom:10px; font-weight:700; font-size:.94rem;
+  background:color-mix(in srgb, var(--good) 12%, var(--card)); color:var(--good);
+  border:2px solid color-mix(in srgb, var(--good) 45%, var(--card));}
+.safety.warn{background:color-mix(in srgb, var(--warn) 14%, var(--card)); color:var(--warn);
+  border-color:var(--warn);}
+.safety.bad{background:color-mix(in srgb, var(--bad) 12%, var(--card)); color:var(--bad); border-color:var(--bad);}
+.safety .sub{display:block; font-weight:600; font-size:.86rem; margin-top:3px; opacity:.9;}
+.snaprow{display:flex; gap:8px; align-items:center; padding:8px 0; border-bottom:1px solid var(--line);}
+.snaprow .txt{flex:1; font-size:.9rem;}
+.snaprow .txt b{display:block; font-size:.95rem;}
+.snaprow button{min-height:44px; padding:0 14px; border-radius:10px; border:2px solid var(--line);
+  background:var(--chip); color:var(--ink); font-weight:800;}
+[data-bright="2"] .safety, [data-bright="2"] .snaprow button{border-width:3px;}
 .coachhead{display:flex; gap:10px; align-items:center; padding:0 0 10px; border-bottom:1px solid var(--line); margin-bottom:8px;}
 .coachhead .ico{font-size:1.7rem;}
 .coachhead .l1{font-weight:900; font-size:1.05rem;}
@@ -647,13 +660,17 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
     <button class="btn" id="btnMergeDl" style="display:none">⬇️ Download merged CSV</button>
     <button class="btn sec" id="btnMergeShare" data-share style="display:none">📤 Send merged file to Drive / share…</button>
   </div>
-  <h3>Backup</h3>
+  <h3>Backup &amp; recovery</h3>
   <div class="card">
+    <div class="safety" id="safetyBox"></div>
     <button class="btn sec" id="btnBackup">⬇️ Backup everything (JSON)</button>
     <button class="btn sec" id="btnShareBackup" data-share>📤 Send backup to Drive / share…</button>
     <button class="btn sec" id="btnRestore">⬆️ Restore backup</button>
     <input type="file" id="fileRestore" accept=".json" style="display:none">
     <div class="muted">Use backup/restore to move all games & settings between phone, tablet and laptop. The backup contains your roster and play calls — keep it somewhere private.</div>
+    <label class="f" style="margin-top:14px">SNAPSHOTS ON THIS DEVICE</label>
+    <div class="muted">Taken automatically at the end of every game and every 25 plays, in a separate store from the app's main copy. Use one if something goes wrong — a bad restore, a game deleted by mistake, or storage cleared out from under you.</div>
+    <div id="snapList" style="margin-top:8px"></div>
   </div>
   <h3>Team file (private roster &amp; playbook)</h3>
   <div class="card">
@@ -783,9 +800,93 @@ function applyPresets(pr){
   if(!Array.isArray(db.lists.favorites)) db.lists.favorites=[];
   save();
 }
+/* ================= THE VAULT =================
+   localStorage is one basket. A renamed site, a cleared cache or a browser
+   reclaiming space takes it with no warning and no undo. So everything is
+   mirrored into IndexedDB — a separate store the browser treats differently —
+   plus a short history of point-in-time snapshots. Nothing here needs the
+   network or a tap; the app just stops being a single point of failure. */
+const VAULT_DB='safFlagVault', VAULT_STORE='snaps';
+const SNAP_KEEP=8;            // how many point-in-time copies to hold
+const SNAP_EVERY=25;          // ...and how many plays between automatic ones
+let vaultReady=null, vaultBroken=false;
+function vault(){
+  if(vaultBroken) return Promise.reject(new Error('no indexeddb'));
+  if(vaultReady) return vaultReady;
+  vaultReady = new Promise((res,rej)=>{
+    let req;
+    try{ req=indexedDB.open(VAULT_DB,1); }catch(e){ vaultBroken=true; return rej(e); }
+    req.onupgradeneeded=()=>{ try{ req.result.createObjectStore(VAULT_STORE); }catch(e){} };
+    req.onsuccess=()=>res(req.result);
+    req.onerror=()=>{ vaultBroken=true; rej(req.error||new Error('indexeddb blocked')); };
+  });
+  return vaultReady;
+}
+function vaultOp(mode, fn){
+  return vault().then(dbi=>new Promise((res,rej)=>{
+    const tx=dbi.transaction(VAULT_STORE, mode);
+    const st=tx.objectStore(VAULT_STORE);
+    let out;
+    try{ out=fn(st); }catch(e){ return rej(e); }
+    tx.oncomplete=()=>res(out && out.result!==undefined ? out.result : out);
+    tx.onerror=()=>rej(tx.error);
+  }));
+}
+const vaultPut = (k,v)=>vaultOp('readwrite', st=>st.put(v,k));
+const vaultGet = (k)=>vaultOp('readonly',  st=>st.get(k));
+const vaultDel = (k)=>vaultOp('readwrite', st=>st.delete(k));
+const vaultKeys= ()=>vaultOp('readonly',  st=>st.getAllKeys());
+const vaultAll = ()=>vaultOp('readonly',  st=>st.getAll());
+
+function snapMeta(d){
+  const games=(d.games||[]);
+  return {at:Date.now(), games:games.length,
+          plays:games.reduce((s,g)=>s+(g.plays||[]).filter(p=>!p._divider&&!p._opp).length,0),
+          last:(games[games.length-1]||{}).name||''};
+}
+let vaultTimer=null, lastSnapPlays=null;
+function vaultSync(force){
+  clearTimeout(vaultTimer);
+  vaultTimer=setTimeout(()=>{
+    const copy=JSON.parse(JSON.stringify(db));
+    const meta=snapMeta(copy);
+    vaultPut('live', {meta:meta, db:copy}).catch(()=>{});
+    // Never snapshot an empty app — a blank state written over the history
+    // would be worse than no history at all.
+    if(!meta.plays){ lastSnapPlays=0; return; }
+    const first = (lastSnapPlays===null);
+    if(first) lastSnapPlays=meta.plays;                  // first sync of the session sets the mark
+    if(force || meta.plays>=lastSnapPlays+SNAP_EVERY){
+      lastSnapPlays=meta.plays;
+      vaultPut('snap-'+meta.at, {meta:meta, db:copy}).then(pruneSnaps).catch(()=>{});
+    } else if(first){
+      // opening the app shouldn't churn the history, but make sure it isn't empty
+      vaultKeys().then(keys=>{
+        if(!keys.some(k=>String(k).startsWith('snap-')))
+          return vaultPut('snap-'+meta.at, {meta:meta, db:copy}).then(pruneSnaps);
+      }).catch(()=>{});
+    }
+  }, force?0:1500);
+}
+async function pruneSnaps(){
+  try{
+    const keys=(await vaultKeys()).filter(k=>String(k).startsWith('snap-')).sort();
+    for(const k of keys.slice(0, Math.max(0, keys.length-SNAP_KEEP))) await vaultDel(k);
+  }catch(e){}
+}
 function save(){
-  if(!canStore) return;
-  try{ localStorage.setItem(LS_KEY, JSON.stringify(db)); }catch(e){}
+  if(canStore){
+    try{ localStorage.setItem(LS_KEY, JSON.stringify(db)); }catch(e){}
+  }
+  vaultSync(false);
+}
+/* After a restore or a recovery the pointer to the "current" game can name a
+   game that isn't there any more. Park it on the newest one instead. */
+function ensureGame(){
+  if(!Array.isArray(db.games)) db.games=[];
+  if(!db.games.some(g=>g.id===db.currentGameId)){
+    db.currentGameId = db.games.length ? db.games[db.games.length-1].id : null;
+  }
 }
 function uid(){ return 'g'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 function game(){ return db.games.find(g=>g.id===db.currentGameId); }
@@ -806,8 +907,19 @@ function endGame(){
   const g=activeGame(); if(!g){ return; }
   if(!confirm('End this game? You won’t be able to add more plays to it.')) return;
   g.status='ended'; save(); renderLog();
+  vaultSync(true);                       // a snapshot of the finished game, now
   toast('Game ended');
   window.scrollTo({top:0,behavior:'smooth'});
+  // the moment a coach is most likely to act on it, and least likely to be busy
+  const s=backupState();
+  if(s.kind!=='good'){
+    setTimeout(()=>{
+      if(confirm('Game saved.\n\n'+s.msg+'\n\nTake a backup file now? It opens the share sheet so you can put it in Drive.')){
+        goExport();
+        setTimeout(()=>$(SHARE_OK?'btnShareBackup':'btnBackup').click(), 300);
+      }
+    }, 500);
+  }
 }
 function resumeGame(){
   const g=game(); if(!g) return;
@@ -2851,6 +2963,7 @@ function expGameIds(){
 }
 function expGames(){ const s=expGameIds(); return db.games.filter(g=>s.includes(g.id)); }
 function renderExport(){
+  renderSafety(); renderSnaps();
   const allIds=db.games.map(g=>g.id);
   const sel=expGameIds();
   const box=$('expGamesSel'); box.innerHTML='';
@@ -3204,12 +3317,75 @@ $('btnShareStats').addEventListener('click',async()=>{
   if(t==null){ toast('No plays in the selected game(s)'); return; }
   await shareFile(statsCsvName(), t, 'text/csv');
 });
+/* ---- how safe is this device right now? ---- */
+function ago(ts){
+  if(!ts) return 'never';
+  const s=Math.max(0,(Date.now()-ts)/1000);
+  if(s<90) return 'just now';
+  if(s<5400) return Math.round(s/60)+' min ago';
+  if(s<172800) return Math.round(s/3600)+' hours ago';
+  return Math.round(s/86400)+' days ago';
+}
+function totalPlays(){ return db.games.reduce((s,g)=>s+ourPlays(g).length,0); }
+function noteBackup(){
+  db.settings.lastBackupAt=Date.now();
+  db.settings.lastBackupPlays=totalPlays();
+  save(); renderSafety();
+}
+function backupState(){
+  const at=db.settings.lastBackupAt||0;
+  const since=totalPlays()-(db.settings.lastBackupPlays||0);
+  const days=at? (Date.now()-at)/86400000 : 999;
+  if(!at) return {kind:'bad', msg:'No backup file has ever been taken from this device.',
+                  sub:'Everything lives in this browser. One tap below puts a copy somewhere you control.'};
+  if(since>=20 || days>=21) return {kind:'warn', msg:'Last backup '+ago(at)+' · '+since+' plays logged since.',
+                  sub:'Worth taking a fresh one.'};
+  return {kind:'good', msg:'Last backup '+ago(at)+(since? ' · '+since+' plays since':' · up to date'),
+          sub:'A second copy is also kept on this device automatically.'};
+}
+function renderSafety(){
+  const box=$('safetyBox'); if(!box) return;
+  const s=backupState();
+  box.className='safety '+s.kind;
+  box.innerHTML=esc(s.msg)+'<span class="sub">'+esc(s.sub)+'</span>';
+}
+async function renderSnaps(){
+  const box=$('snapList'); if(!box) return;
+  box.innerHTML='<div class="muted">Loading…</div>';
+  let all=[];
+  try{ all=(await vaultAll())||[]; }catch(e){
+    box.innerHTML='<div class="muted">This browser won’t allow the second copy (private mode?). Backup files are your only safety net here.</div>';
+    return;
+  }
+  const snaps=all.filter(x=>x&&x.meta&&x.db).sort((a,b)=>b.meta.at-a.meta.at).slice(0,SNAP_KEEP+1);
+  if(!snaps.length){ box.innerHTML='<div class="muted">No snapshots yet — the first one is taken when you end a game.</div>'; return; }
+  box.innerHTML='';
+  snaps.forEach(s=>{
+    const row=el('div',{class:'snaprow'});
+    row.innerHTML='<div class="txt"><b>'+esc(ago(s.meta.at))+'</b>'
+      +esc(s.meta.games+' game'+(s.meta.games===1?'':'s')+' · '+s.meta.plays+' plays'
+           +(s.meta.last?' · '+s.meta.last:''))+'</div>';
+    const b=el('button',{type:'button'},'Use this');
+    b.addEventListener('click',()=>{
+      if(!confirm('Replace everything currently in the app with this snapshot?\n\n'
+        +s.meta.games+' games, '+s.meta.plays+' plays, from '+ago(s.meta.at)+'.')) return;
+      db=Object.assign(JSON.parse(JSON.stringify(DEFAULT_DB)), s.db);
+      save(); ensureGame(); freshCur();
+      renderLog(); renderExport(); renderTeam();
+      toast('Snapshot restored');
+    });
+    row.appendChild(b);
+    box.appendChild(row);
+  });
+}
 function backupName(){ return 'flaglog_backup_'+new Date().toISOString().slice(0,10)+'.json'; }
 $('btnBackup').addEventListener('click',()=>{
   download(backupName(), JSON.stringify(db,null,1), 'application/json');
+  noteBackup();
 });
 $('btnShareBackup').addEventListener('click',async()=>{
-  await shareFile(backupName(), JSON.stringify(db,null,1), 'application/json');
+  const ok=await shareFile(backupName(), JSON.stringify(db,null,1), 'application/json');
+  noteBackup();   // shared or downloaded, either way a copy left the app
 });
 $('btnRestore').addEventListener('click',()=>$('fileRestore').click());
 $('fileRestore').addEventListener('change',e=>{
@@ -3368,18 +3544,46 @@ function bootApp(){
   renderLockStatus();
 }
 function goLog(){ const btn=document.querySelector('nav button[data-scr="log"]'); if(btn) btn.click(); }
+function goExport(){ const btn=document.querySelector('nav button[data-scr="export"]'); if(btn) btn.click(); }
 $('btnStartGame').addEventListener('click',startGame);
 $('startOpp').addEventListener('keydown',e=>{ if(e.key==='Enter') startGame(); });
 $('btnResumeGame').addEventListener('click',resumeGame);
 $('btnEndGame').addEventListener('click',endGame);
 $('btnStaleNew').addEventListener('click',newGameFlow);
+/* If localStorage is empty but the vault isn't, this device HAS been used —
+   the storage was cleared, evicted, or the site moved. Recover instead of
+   greeting a coach with an empty app. */
+async function tryVaultRecovery(){
+  let live=null;
+  try{ live=await vaultGet('live'); }catch(e){ return false; }
+  if(!live || !live.db || !(live.db.games||[]).length) return false;
+  // reading the vault takes a moment. If anything real turned up in the
+  // meantime — a restore, a preset load, another tab — leave it alone.
+  if((db.games||[]).length) return false;
+  const m=live.meta||snapMeta(live.db);
+  db=Object.assign(JSON.parse(JSON.stringify(DEFAULT_DB)), live.db);
+  hadSavedData=true;
+  save();
+  bootApp();
+  setTimeout(()=>{
+    openAI('<div class="l1" style="font-weight:800;margin-bottom:6px">Your data was restored from this device’s backup copy.</div>'
+      +'<div class="l2">'+m.games+' game(s), '+m.plays+' plays, last saved '+ago(m.at)+'.</div>'
+      +'<div class="muted" style="margin-top:10px">The browser had lost the main copy — that happens when a site moves, storage is cleared, or the browser reclaims space. Nothing was lost because a second copy is kept here automatically.</div>'
+      +'<div class="muted" style="margin-top:10px"><b>Take a backup file now</b> from the Export tab so there is a copy off this device too.</div>', 'Recovered');
+  }, 400);
+  return true;
+}
 (function startUp(){
   applyTheme();
   renderLockStatus();
   if(!SHARE_OK) document.querySelectorAll('[data-share]').forEach(b=>b.style.display='none');
-  if(hadSavedData){ bootApp(); return; }             // returning device — data already stored locally
-  if(PRESET_PLAIN){ applyPresets(PRESET_PLAIN); bootApp(); return; }   // master copy with data built in
-  showSyncGate();                                     // public copy, fresh device — pull the team file
+  if(hadSavedData){ bootApp(); vaultSync(false); return; }  // returning device — data already stored locally
+  if(PRESET_PLAIN){                                         // master copy with data built in
+    applyPresets(PRESET_PLAIN); bootApp();
+    tryVaultRecovery();                                     // still worth a look, but don't block the boot
+    return;
+  }
+  tryVaultRecovery().then(ok=>{ if(!ok) showSyncGate(); });  // public copy — recover, or ask for the team file
 })();
 </script>
 <script>if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));}</script>
