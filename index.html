@@ -190,6 +190,7 @@ nav button.on{color:var(--accent);}
 .fieldbar .fbspot{font-size:.95rem; letter-spacing:.01em;}
 .fieldbar .fbspot b{display:block; font-size:1.05rem;}
 .fieldbar .fbspot span{display:block; font-weight:700; font-size:.78rem; color:var(--ink3); text-transform:uppercase; letter-spacing:.06em;}
+.fieldbar.gainbar{grid-template-columns:52px 52px 1fr 52px 52px;}
 .btnpair .btn{margin:0;}
 /* printable stats sheet (hidden on screen, shown only while printing) */
 #printArea{display:none;}
@@ -266,6 +267,12 @@ nav button.on{color:var(--accent);}
   text-transform:uppercase; color:var(--ink3); margin-bottom:5px;}
 .revfield.missing > label{color:var(--warn);}
 .revfield.missing .chips{outline:3px solid var(--warn); outline-offset:4px; border-radius:10px;}
+.revfield.missing .fieldbar{outline:3px solid var(--warn); outline-offset:4px; border-radius:10px;}
+/* a full playbook is 30 chips — bound it so the rest of the sheet stays reachable */
+.revfield .scrollbox{max-height:26vh; overflow-y:auto; -webkit-overflow-scrolling:touch;
+  border:1px solid var(--line); border-radius:12px; padding:8px; background:var(--surface);}
+.revfield.missing .scrollbox{outline:3px solid var(--warn); outline-offset:3px;}
+.revfield.missing .scrollbox .chips{outline:none;}
 .revnav{display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; position:sticky; bottom:-14px;
   background:var(--bg); padding:10px 0 14px; border-top:1px solid var(--line);
   box-shadow:0 -8px 12px var(--bg);}
@@ -300,6 +307,20 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
   box-shadow:var(--shadow);}
 .oppsnap:active{transform:scale(.99);}
 .oppsnap span{color:var(--ink3); font-weight:700;}
+/* End drive is a normal part of the flow (orange); this one marks something
+   that went wrong, and the two sit next to each other on a bright sideline. */
+.missedsnap{display:block; width:100%; min-height:50px; margin:8px 0 0; font-size:1rem; font-weight:800;
+  color:var(--bad); background:color-mix(in srgb, var(--bad) 10%, var(--card));
+  border:2px dashed var(--bad); border-radius:12px;}
+.missedsnap:active{transform:scale(.99);}
+.missedsnap span{color:var(--ink3); font-weight:700;}
+[data-bright="2"] .missedsnap{ color:#000; background:#fff; border:3px dashed #000; font-weight:900; }
+.playrow.gapmark{justify-content:flex-start; gap:8px; color:var(--warn); font-weight:800; font-size:.82rem;
+  letter-spacing:.04em; background:color-mix(in srgb, var(--warn) 8%, var(--card));}
+.playrow.gapmark .no{color:var(--warn);}
+.revgap{border-radius:10px; padding:9px 11px; margin-bottom:10px; font-weight:800; font-size:.9rem;
+  color:var(--warn); background:color-mix(in srgb, var(--warn) 12%, var(--card)); border:2px dashed var(--warn);}
+.revgap span{display:block; font-weight:600; font-size:.84rem; margin-top:3px; opacity:.9;}
 .playrow.oppmark{justify-content:flex-start; gap:8px; color:var(--ink3); font-weight:700; font-size:.8rem;
   letter-spacing:.06em; text-transform:uppercase; background:var(--surface);}
 .playrow.divider{justify-content:center; color:var(--ink3); font-weight:800; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; background:var(--surface);}
@@ -423,6 +444,7 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
   </div>
 
   <button class="oppsnap" id="btnOppSnap">◀ Opp snap <span id="oppSnapCount"></span></button>
+  <button class="missedsnap" id="btnMissed">⚠ Missed one <span>· holds the clip, fill it from film</span></button>
   <button class="enddrive" id="btnEndDrive">⤵ End drive — blank row in export &amp; new series</button>
 
   <h3><span id="lblForm">Formation</span> <span class="sel" id="selForm"></span></h3>
@@ -661,7 +683,12 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
     <button class="btn sec" id="btnShareBackup" data-share>📤 Send backup to Drive / share…</button>
     <button class="btn sec" id="btnRestore">⬆️ Restore backup</button>
     <input type="file" id="fileRestore" accept=".json" style="display:none">
-    <div class="muted">Use backup/restore to move all games & settings between phone, tablet and laptop. The backup contains your roster and play calls — keep it somewhere private.</div>
+    <div class="muted">Restore <b>replaces everything</b> on this device with what's in the file. To pull in one game without losing what's already here, use the next button instead.</div>
+    <label class="f" style="margin-top:14px">ADD A GAME FROM ANOTHER DEVICE</label>
+    <div class="muted">Two people logging on two tablets ends up as two half-seasons. Point this at the other device's backup file, or at a Hudl CSV this app exported, and pick the games to bring across — everything already on this device stays put.</div>
+    <button class="btn sec" id="btnImportGame" style="margin-top:8px">➕ Add game from file</button>
+    <input type="file" id="fileImport" accept=".json,.csv" style="display:none">
+    <div id="importPick" style="margin-top:8px"></div>
     <label class="f" style="margin-top:14px">SNAPSHOTS ON THIS DEVICE</label>
     <div class="muted">Taken automatically at the end of every game and every 25 plays, in a separate store from the app's main copy. Use one if something goes wrong — a bad restore, a game deleted by mistake, or storage cleared out from under you.</div>
     <div id="snapList" style="margin-top:8px"></div>
@@ -835,7 +862,7 @@ const vaultAll = ()=>vaultOp('readonly',  st=>st.getAll());
 function snapMeta(d){
   const games=(d.games||[]);
   return {at:Date.now(), games:games.length,
-          plays:games.reduce((s,g)=>s+(g.plays||[]).filter(p=>!p._divider&&!p._opp).length,0),
+          plays:games.reduce((s,g)=>s+(g.plays||[]).filter(p=>!p._divider&&!p._opp&&!p._gap).length,0),
           last:(games[games.length-1]||{}).name||''};
 }
 let vaultTimer=null, lastSnapPlays=null;
@@ -1144,6 +1171,16 @@ function autoEfficient(){
   if(cur.gain>=7) return true;                       // chunk play (7+ yards)
   return false;
 }
+/* The same rule, applied to a row that's already saved — for when a result or
+   a gain is corrected afterwards and the efficiency has to follow it. */
+function reEff(p){
+  if(/TD/.test(p['RESULT']||'')) return 'Y';
+  if(isXPplay(p)) return GOOD_RESULTS.includes(p['RESULT'])? 'Y' : 'N';
+  const gain=parseInt(p['GN/LS'],10)||0;
+  const dist=parseInt(p['DIST'],10);
+  if(!isNaN(dist) && dist>0 && gain>=dist) return 'Y';
+  return gain>=7? 'Y' : 'N';
+}
 function renderHeader(){
   const g=activeGame();
   if(!g){ $('hGame').textContent='SAF Play Logger'; $('hSit').textContent='No game in progress'; return; }
@@ -1229,6 +1266,13 @@ function renderLog(){
   const showOpp = db.settings.oppMarker!==false && (db.settings.logMode||'O')==='O';
   $('btnOppSnap').style.display = showOpp ? 'block' : 'none';
   if(showOpp && gNow){ const r=oppRun(gNow); $('oppSnapCount').textContent = r? '· '+r+' in a row' : ''; }
+  // same condition: it only means anything while you're the one logging offence
+  $('btnMissed').style.display = ((db.settings.logMode||'O')==='O') ? 'block' : 'none';
+  if(gNow){
+    const ng=gapRows(gNow).length;
+    $('btnMissed').querySelector('span').textContent = ng
+      ? '· '+ng+' to fill in from film' : '· holds the clip, fill it from film';
+  }
 
   const onXP = (cur.dn===0 || cur.pendingXP);
   const xpNeeded = onXP && !cur.xp;      // nothing picked yet — make that obvious
@@ -1592,9 +1636,11 @@ $('btnSave').addEventListener('click',()=>{
 $('btnUndo').addEventListener('click',()=>{
   const g=game();
   if(!g || !g.plays.length){ toast('Nothing to undo'); return; }
-  // an opp marker is its own little unit — drop it without rewinding the situation
-  if(g.plays[g.plays.length-1]._opp){
-    g.plays.pop(); renumber(g); save(); renderLog(); toast('Opp snap removed'); return;
+  // a marker is its own little unit — drop it without rewinding the situation
+  const last=g.plays[g.plays.length-1];
+  if(last._opp || last._gap){
+    const what = last._opp ? 'Opp snap' : 'Missed-play marker';
+    g.plays.pop(); renumber(g); save(); renderLog(); renderPlays(); toast(what+' removed'); return;
   }
   g.plays.pop();
   if(lastSnapshot){
@@ -1616,7 +1662,21 @@ function renumber(g){ let n=0; g.plays.forEach(pp=>{ if(pp._divider){ pp['PLAY #
    so it never reaches the stats. Without it, a Hudl import has to guess which
    clips are ours. */
 function isOppRow(p){ return !!p._opp; }
-function ourPlays(g){ return (g.plays||[]).filter(p=>!p._divider && !p._opp); }
+/* ---- missed-play marker ----
+   The opponent marker covers snaps that were never ours. This covers the other
+   hole: one of our snaps that never got tapped in — the sideline shouted, the
+   tablet locked, you were talking to a player. One tap holds the clip's place
+   so the export still lines up row-for-row with the film, and the row carries
+   _gap so it stays out of every stat and out of the coach: a play with no
+   result and no gain is exactly the thing that makes the numbers lie. It is a
+   to-do, not a blank — film review picks it up and you fill it in from the
+   clip, at which point it stops being a gap and becomes a play. */
+function isGapRow(p){ return !!p._gap; }
+function gapRows(g){ return (g&&g.plays||[]).filter(p=>p._gap); }
+/* A row stops being a gap the moment it has a result: that's the point where
+   there's something real to count. */
+function clearGapIfFilled(p){ if(p._gap && p['RESULT']) delete p._gap; }
+function ourPlays(g){ return (g.plays||[]).filter(p=>!p._divider && !p._opp && !p._gap); }
 function oppRun(g){                       // opponent snaps since our last play
   let n=0;
   for(let i=g.plays.length-1;i>=0;i--){
@@ -1637,6 +1697,24 @@ $('btnOppSnap').addEventListener('click',()=>{
   renumber(g);
   save(); renderLog();
   toast('Opp snap '+oppRun(g)+' — placeholder row for the film');
+});
+
+/* The row a missed play leaves behind. ODK=O because it was our snap, and
+   nothing else, so there is nothing for a stat to pick up by accident. */
+function makeGapRow(){
+  const row={}; COLS.forEach(c=>row[c]='');
+  row['ODK']='O'; row['TEAM']=db.settings.team;
+  row._gap=true; row._t=Date.now();
+  return row;
+}
+$('btnMissed').addEventListener('click',()=>{
+  const g=activeGame();
+  if(!g){ toast('Start a game first'); return; }
+  buzz(12);
+  g.plays.push(makeGapRow());
+  renumber(g);
+  save(); renderLog(); renderPlays();
+  toast('Missed play marked — '+gapRows(g).length+' to fill in from the film');
 });
 
 $('btnEndDrive').addEventListener('click',()=>{
@@ -1683,7 +1761,10 @@ function renderPlays(){
   $('reviewCard').style.display = st.n ? 'block' : 'none';
   if(st.n){
     const bits=[];
+    if(st.gaps) bits.push('<b>'+st.gaps+'</b> marked missed, still empty');
     if(st.holes) bits.push('<b>'+st.holes+'</b> missing a result or receiver');
+    // the one that quietly wrecks the numbers, so it gets said out loud
+    if(st.noGain) bits.push('<b>'+st.noGain+'</b> with no gain logged');
     if(st.noCov) bits.push('<b>'+st.noCov+'</b> with no coverage tagged');
     if(st.noSpot) bits.push('<b>'+st.noSpot+'</b> with no ball spot');
     $('reviewSummary').innerHTML = bits.length
@@ -1707,6 +1788,15 @@ function renderPlays(){
       box.appendChild(row);
       return;
     }
+    if(p._gap){
+      const row=el('div',{class:'playrow gapmark'},
+        '<div class="no">'+esc(p['PLAY #'])+'</div>'
+        +'<div class="desc"><div class="l1">⚠ missed play — not logged</div>'
+        +'<div class="l2">Holds this clip in the export. Tap to fill it in from the film.</div></div>');
+      row.addEventListener('click',()=>openEdit(idx));
+      box.appendChild(row);
+      return;
+    }
     const s=playSummary(p);
     const gn=parseInt(p['GN/LS']||'0',10)||0;
     const row=el('div',{class:'playrow'});
@@ -1727,8 +1817,14 @@ function isPassPlay(p){
 }
 function playGaps(p){
   const gaps=[];
+  if(p._gap) gaps.push('play call');
   if(!p['RESULT'] && p['DN']!=='0') gaps.push('result');
   if(['Complete','Complete, TD'].includes(p['RESULT']) && !p['RECEIVER']) gaps.push('receiver');
+  /* A completion or run logged with no yardage isn't a zero-yard play, it's a
+     play whose gain never got tapped — and efficiency is derived from that
+     gain, so it drags the whole game's numbers down. Worth surfacing here,
+     where you have the clip in front of you and can just read it off. */
+  if(movedBall(p) && !isXPplay(p) && !(parseInt(p['GN/LS'],10)||0)) gaps.push('gain');
   if(!p['COVERAGE']) gaps.push('coverage');
   if(db.settings.trackField!==false && !p['YARD LN']) gaps.push('field position');
   return gaps;
@@ -1757,7 +1853,9 @@ function reviewStats(g){
   const holes=list.filter(p=>playGaps(p).some(x=>HARD_GAPS.includes(x))).length;
   const noCov=list.filter(p=>!p['COVERAGE']).length;
   const noSpot=(db.settings.trackField!==false) ? list.filter(p=>!p['YARD LN']).length : 0;
-  return {n:list.length, holes:holes, noCov:noCov, noSpot:noSpot};
+  const noGain=list.filter(p=>playGaps(p).includes('gain')).length;
+  const gaps=list.filter(p=>p._gap).length;
+  return {n:list.length, holes:holes, noCov:noCov, noSpot:noSpot, noGain:noGain, gaps:gaps};
 }
 function openReview(start){
   const g=game();
@@ -1797,18 +1895,40 @@ function renderReview(){
 
   const s=playSummary(p);
   const gn=parseInt(p['GN/LS']||'0',10)||0;
-  $('revPlay').innerHTML = '<div class="l1">'+esc(s.l1)+'  <span style="color:var(--ink3)">'
+  $('revPlay').innerHTML =
+      (p._gap? '<div class="revgap">⚠ Missed play — nothing was logged live.'
+        +'<span>It’s holding this clip’s place in the export and staying out of every stat. '
+        +'Read it off the film below; a result is what turns it back into a play.</span></div>' : '')
+    + '<div class="l1">'+esc(p._gap && !s.l1 ? '(nothing logged)' : s.l1)+'  <span style="color:var(--ink3)">'
       +(gn>0?'+':'')+gn+' yds</span></div><div class="l2">'+esc(s.l2)+'</div>'
     + (gaps.length? '<div class="gap">missing: '+gaps.join(' · ')+'</div>' : '');
 
   const box=$('revFields'); box.innerHTML='';
-  const field=(label, missing)=>{
+  const field=(label, missing, scroll)=>{
     const w=el('div',{class:'revfield'+(missing?' missing':'')});
     w.innerHTML='<label>'+esc(label)+'</label>';
-    const c=el('div',{class:'chips'}); w.appendChild(c); box.appendChild(w);
+    const c=el('div',{class:'chips'});
+    if(scroll){ const s=el('div',{class:'scrollbox'}); s.appendChild(c); w.appendChild(s); }
+    else w.appendChild(c);
+    box.appendChild(w);
     return c;
   };
-  const touch=()=>{ save(); renderReview(); };
+  /* Any edit can be the one that fills the hole, so the check rides on every
+     field rather than being wired to one of them. */
+  const touch=()=>{ clearGapIfFilled(p); save(); renderReview(); };
+
+  /* A missed play has no call either — those chips only appear when there's
+     something to recover, so the normal review flow is unchanged. */
+  if(p._gap){
+    if((db.lists.forms||[]).length){
+      const c=field('Formation', !p['OFF FORM']);
+      chipRowStatic(c, db.lists.forms, v=>p['OFF FORM']===v, v=>{ p['OFF FORM']=(p['OFF FORM']===v?'':v); touch(); });
+    }
+    if((db.lists.plays||[]).length){
+      const c=field('Play call', !p['OFF PLAY'], true);
+      chipRowStatic(c, db.lists.plays, v=>p['OFF PLAY']===v, v=>{ p['OFF PLAY']=(p['OFF PLAY']===v?'':v); touch(); });
+    }
+  }
 
   {
     const c=field('Result', gaps.includes('result'));
@@ -1817,7 +1937,8 @@ function renderReview(){
       if(p['RESULT']===r.result){ p['RESULT']=''; p['RESULT W']=''; }
       else { p['RESULT']=r.result; p['RESULT W']=r.rw;
              p['PLAY TYPE'] = (p['DN']==='0') ? 'Extra Pt.' : (r.result==='Run'?'Run':'Pass');
-             p['PLAY TYPE W'] = (r.result==='Run'?'RUN':'PASS'); }
+             p['PLAY TYPE W'] = (r.result==='Run'?'RUN':'PASS');
+             p['EFF']=reEff(p); }            // a recovered play still needs its efficiency
       touch();
     });
   }
@@ -1826,6 +1947,30 @@ function renderReview(){
     chipRowStatic(c, db.roster.map(r=>r.name), v=>p['RECEIVER']===v, v=>{
       p['RECEIVER'] = (p['RECEIVER']===v? '' : v); touch();
     });
+  }
+  /* The gain, at the film desk. Efficiency is worked out from it, so a play
+     that never got one drags down the play call, the down, the zone and the
+     season comparison all at once — this is the single most valuable thing on
+     this screen to fix, and until now there was nowhere to fix it. */
+  if(!isXPplay(p)){
+    const w=el('div',{class:'revfield'+(gaps.includes('gain')?' missing':'')});
+    w.innerHTML='<label>Gain'+(gaps.includes('gain')?' — not logged':'')+'</label>'
+      + '<div class="fieldbar gainbar" style="margin-top:0">'
+      + '<button type="button" data-gn="-5">−5</button><button type="button" data-gn="-1">−1</button>'
+      + '<button type="button" class="fbspot" data-gn="0"><b>'+(gn>0?'+':'')+gn+'</b><span>yards</span></button>'
+      + '<button type="button" data-gn="1">+1</button><button type="button" data-gn="5">+5</button></div>';
+    box.appendChild(w);
+    const setGain=v=>{
+      p['GN/LS']=String(v);
+      if(p['RESULT']) p['EFF']=reEff(p);      // efficiency follows the yardage it's derived from
+      spreadSpotForward(g, p);          // and so does the rest of the drive
+      touch();
+    };
+    w.querySelectorAll('[data-gn]').forEach(b=>b.addEventListener('click',()=>{
+      const d=parseInt(b.dataset.gn,10);
+      if(d===0) return;                 // the middle button is the readout
+      setGain(gn+d);
+    }));
   }
   if((db.lists.coverages||[]).length){
     const c=field('Coverage seen', gaps.includes('coverage'));
@@ -1892,7 +2037,11 @@ function openEdit(idx){
   const g=game(); const p=g.plays[idx];
   const names=db.roster.map(r=>r.name);
   const sheet=$('editSheet');
-  sheet.innerHTML='<h2>Play '+esc(p['PLAY #'])+' <button class="x" id="edX">✕</button></h2><div class="fgrid">'
+  sheet.innerHTML='<h2>Play '+esc(p['PLAY #'])+' <button class="x" id="edX">✕</button></h2>'
+    + (p._gap? '<div class="revgap">Missed play — nothing was logged live.'
+        +'<span>It is holding this clip’s place in the export and staying out of every stat. '
+        +'Give it a result and it counts as a play again.</span></div>' : '')
+    + '<div class="fgrid">'
     + inpHtml('DN',p['DN']) + inpHtml('DIST',p['DIST'])
     + selHtml('PLAY TYPE',['Pass','Run','Extra Pt.','Punt'],p['PLAY TYPE'])
     + selHtml('RESULT',['Complete','Incomplete','Complete, TD','TD','Tipped','Run','Sack','Interception','Fumble','Penalty'],p['RESULT'])
@@ -1917,8 +2066,11 @@ function openEdit(idx){
   $('editModal').classList.add('open');
   $('edX').addEventListener('click',closeEdit);
   $('edSave').addEventListener('click',()=>{
+    const wasGap=!!p._gap;
     sheet.querySelectorAll('[data-col]').forEach(inp=>{ p[inp.dataset.col]=inp.value; });
-    save(); closeEdit(); renderPlays(); renderHeader(); toast('Play updated');
+    clearGapIfFilled(p);
+    save(); closeEdit(); renderPlays(); renderHeader(); renderLog();
+    toast(wasGap && !p._gap ? 'Missed play filled in — it counts now' : 'Play updated');
   });
   $('edDup').addEventListener('click',()=>{
     const copy=JSON.parse(JSON.stringify(p));
@@ -1926,12 +2078,17 @@ function openEdit(idx){
     renumber(g);
     save(); renderPlays(); renderHeader(); openEdit(idx+1); toast('Play duplicated');
   });
+  /* The gap you only spot afterwards, sitting in the play list next to the two
+     plays it belongs between. Tagged _gap like the live marker, so until it's
+     filled it holds the clip and nothing else — before this it went into the
+     stats as a real play that gained nothing. */
   $('edIns').addEventListener('click',()=>{
-    const blank={}; COLS.forEach(c=>blank[c]='');
-    blank['TEAM']=db.settings.team; blank['ODK']='O'; blank['SERIES']=p['SERIES']||'';
+    const blank=makeGapRow();
+    blank['SERIES']=p['SERIES']||'';
     g.plays.splice(idx,0,blank);
     renumber(g);
-    save(); renderPlays(); renderHeader(); openEdit(idx); toast('Blank play inserted — fill it in');
+    save(); renderPlays(); renderHeader(); renderLog(); openEdit(idx);
+    toast('Missed play inserted — fill it in from the film');
   });
   $('edDel').addEventListener('click',()=>{
     if(confirm('Delete play '+p['PLAY #']+'?')){
@@ -1966,7 +2123,7 @@ function selectedGameIds(){
 function selectedPlays(){
   const sel=selectedGameIds();
   // opponent-snap markers are film placeholders, not plays — they never count
-  return db.games.filter(g=>sel.includes(g.id)).flatMap(g=>g.plays).filter(p=>!p._opp);
+  return db.games.filter(g=>sel.includes(g.id)).flatMap(g=>g.plays).filter(p=>!p._opp && !p._gap);
 }
 function renderStats(){
   // game multi-select
@@ -2212,7 +2369,7 @@ function renderStats(){
 const COACH_MIN_NOW = 3;     // calls today before a call is worth mentioning
 const COACH_MIN_BASE = 5;    // plays in the season before it's a baseline
 function offPlaysOf(games){
-  return games.flatMap(g=>g.plays||[]).filter(p=>!p._divider && !p._opp && p['ODK']==='O');
+  return games.flatMap(g=>g.plays||[]).filter(p=>!p._divider && !p._opp && !p._gap && p['ODK']==='O');
 }
 function aggr(list){
   const a={n:0,yds:0,eA:0,eY:0,td:0,to:0};
@@ -2232,35 +2389,144 @@ function groupBy(list, fn){
 const pctS = v => v==null? '—' : Math.round(100*v)+'%';
 const y1 = v => (Math.round(v*10)/10).toFixed(1);
 
+/* ---- data health: what this game's logging can actually support ----
+   A play saved without its gain is still a play. Yards per play divides by it
+   all the same, so a game logged in a hurry reads as a collapse that never
+   happened — and the coach says so with a straight face. Rather than average
+   over the holes, measure them: every finding below that needs a field checks
+   first, and the questions that can't be answered are left unasked instead of
+   answered wrongly. Same for field position — a ball spot that never moves
+   isn't field position, it's a default nobody touched. */
+function movedBall(p){ return /^(Complete|Run|TD)/.test(p['RESULT']||''); }
+function dataHealth(plays, gapN){
+  const off = plays.filter(p=>!isXPplay(p));
+  const n   = off.length;
+  const mv  = off.filter(movedBall);                       // these should carry a gain
+  const got = mv.filter(p=>(parseInt(p['GN/LS'],10)||0)!==0).length;
+  const spots = off.map(p=>ylnToSpot(p['YARD LN'])).filter(s=>s!=null);
+  const sc={}; spots.forEach(s=>sc[s]=(sc[s]||0)+1);
+  const distinct = Object.keys(sc).length;
+  const topShare = spots.length? Math.max(0, ...Object.values(sc))/spots.length : 0;
+  const dnN  = off.filter(p=>p['DN']).length;
+  const effN = off.filter(p=>p['EFF']==='Y'||p['EFF']==='N').length;
+
+  const gr = mv.length>=5 ? got/mv.length : null;
+  const h = {
+    n:n, movedN:mv.length, gainRatio:gr,
+    downRatio: n? dnN/n : null, effRatio: n? effN/n : null,
+    spotN: spots.length, distinct: distinct, topShare: topShare,
+    gain: gr==null ? 'unknown' : gr>=0.75 ? 'ok' : gr>=0.4 ? 'partial' : 'off',
+    /* A spot that barely moves isn't field position. Games where it's really
+       tracked sit around 20–35% on their most common yard line; a tablet where
+       nobody touched it parks 80%+ on one. Judged over the plays that have a
+       spot, not all of them — a season that spans the release of ball tracking
+       still has plenty of real field position in the later half. */
+    spot: n<8 ? 'unknown'
+        : spots.length<8 ? 'off'
+        : (distinct<3 || topShare>=0.6) ? 'flat' : 'ok',
+    down: n<8 ? 'unknown' : (dnN/n>=0.7 ? 'ok' : dnN/n>=0.4 ? 'partial' : 'off'),
+    eff:  n<6 ? 'unknown' : (effN/n>=0.8 ? 'ok' : effN/n>=0.4 ? 'partial' : 'off')
+  };
+  h.gainOk = h.gain==='ok';
+  h.spotOk = h.spot==='ok';
+  h.downOk = h.down==='ok' || h.down==='unknown';
+  /* The one that matters most, and the least obvious. Efficiency isn't typed
+     in — the app works it out from the gain (7+ yards, or enough for the line
+     to gain). So a play saved without its gain doesn't come out unknown, it
+     comes out inefficient, and a game logged in a hurry reads as a collapse.
+     Scores survive that, because a TD is efficient whatever the yardage says,
+     which is why the number lands low rather than at zero and looks credible.
+     If the gains aren't there, neither is the efficiency. */
+  h.effDerived = !h.gainOk && h.gain!=='unknown';
+  h.effOk = h.eff!=='off' && !h.effDerived;
+  /* Plays you marked missed and never went back to. They're honest holes
+     rather than wrong numbers, but the totals below are short by that many. */
+  h.gapN = gapN||0;
+  return h;
+}
+/* The same reading, in sentences: what's missing, and what it costs. */
+function healthNotes(h){
+  const out=[];
+  /* Gains and efficiency are one fact, not two: efficiency is worked out from
+     the gain. Said as two boxes it reads as two problems and pushes the actual
+     findings off the screen. */
+  const pc = Math.round(100*(h.gainRatio||0));
+  if(h.gain==='off')
+    out.push({sev:'bad', t:'Gains weren’t logged, so most of this can’t be read',
+      d:'Only '+pc+'% of the completions and runs carry any yardage ('+h.movedN+' plays). Efficiency isn’t typed in '
+       +'either — it’s worked out from the gain, so a play saved without one counts as inefficient and the game reads '
+       +'as a bad one whatever the offence did. Everything resting on yards or efficiency is left out below: no '
+       +'verdicts on play calls, downs or field position.'});
+  else if(h.gain==='partial')
+    out.push({sev:'warn', t:'Gains missing on a lot of plays',
+      d:'Yardage is on '+pc+'% of the completions and runs. Efficiency is worked out from the gain, so both read low '
+       +'here for a reason that isn’t the offence — the verdicts that rest on them are left out below.'});
+  if(h.spot==='off')
+    out.push({sev:'warn', t:'Ball spot wasn’t logged',
+      d:'Field-position findings are left out — there is nothing to place the plays on.'});
+  else if(h.spot==='flat')
+    out.push({sev:'warn', t:'Ball spot never moved',
+      d:'Every play sits on the same yard line, so field position is a default rather than a reading. Left out below.'});
+  else if(h.spot==='ok' && h.spotN < h.n*0.7)
+    out.push({sev:'warn', t:'Field position covers part of the selection',
+      d:h.spotN+' of '+h.n+' plays have a ball spot — the rest were logged before ball tracking, and sit outside the zone numbers.'});
+  if(h.down==='off')
+    out.push({sev:'warn', t:'Downs mostly missing',
+      d:'Only '+Math.round(100*h.downRatio)+'% of plays have a down, so the by-down findings are left out.'});
+  else if(h.down==='partial')
+    out.push({sev:'warn', t:'Downs missing on some plays',
+      d:Math.round(100*h.downRatio)+'% have a down — the by-down numbers cover only that share.'});
+  if(h.eff==='off')
+    out.push({sev:'bad', t:'Efficiency isn’t set on most plays',
+      d:'Only '+Math.round(100*h.effRatio)+'% carry a Y/N, and nearly everything here is built on it.'});
+  if(h.gapN)
+    out.push({sev:'warn', t:h.gapN+' play'+(h.gapN>1?'s':'')+' marked missed, not yet filled in',
+      d:'They hold their clip in the export but count nowhere here. Open film review and read them off the clip — '
+       +'the numbers below are '+h.gapN+' play'+(h.gapN>1?'s':'')+' short until you do.'});
+  return out;
+}
+
 function coachFindings(focusGames, baseGames){
   const now = offPlaysOf(focusGames).filter(p=>!isXPplay(p));
   const base = offPlaysOf(baseGames).filter(p=>!isXPplay(p));
-  if(now.length < 6) return {findings:[], thin:true, nowN:now.length, baseN:base.length};
+  const gapsIn = gs => gs.reduce((s,g)=>s+gapRows(g).length, 0);
+  const H = dataHealth(now, gapsIn(focusGames)), HB = dataHealth(base, gapsIn(baseGames));
+  if(now.length < 6) return {findings:[], thin:true, nowN:now.length, baseN:base.length, health:H, baseHealth:HB};
   const F=[];
   const add=(kind,title,detail)=>F.push({kind,title,detail});
   const A=aggr(now), B=aggr(base);
   const hasBase = base.length>=15;
+  /* Gates. yppNow guards anything quoting today's yards; yppCmp also needs the
+     season's gains to be there, or the comparison is against a hole. */
+  const yppNow = H.gainOk;
+  const yppCmp = H.gainOk && HB.gainOk;
+  const ypps = a => yppNow ? ', '+y1(a.ypp)+' yds/play' : '';   // drop the phrase, keep the sentence
+  /* effNow gates every verdict that rests on efficiency — which is most of
+     them, since efficiency is derived from the gain. effCmp additionally needs
+     the season's efficiency to be worth comparing against. */
+  const effNow = H.effOk;
+  const effCmp = H.effOk && HB.effOk;
 
   // ---- overall, against the season ----
-  if(hasBase && A.eff!=null && B.eff!=null){
+  if(hasBase && effCmp && A.eff!=null && B.eff!=null){
     const d=Math.round(100*(A.eff-B.eff));
     if(Math.abs(d)>=8){
       add(d>0?'good':'bad', 'Efficiency '+(d>0?'up':'down')+' '+Math.abs(d)+' points on the season',
         pctS(A.eff)+' today against '+pctS(B.eff)+' across your other games ('+base.length+' plays).');
     }
   }
-  if(hasBase && Math.abs(A.ypp-B.ypp)>=1.5){
+  if(hasBase && yppCmp && Math.abs(A.ypp-B.ypp)>=1.5){
     add(A.ypp>B.ypp?'good':'bad', 'Yards per play '+(A.ypp>B.ypp?'up':'down'),
       y1(A.ypp)+' today against '+y1(B.ypp)+' for the season.');
   }
   if(A.to>=2) add('bad', A.to+' turnovers', 'Interceptions and fumbles kill drives faster than anything else on this list.');
 
   // ---- by down ----
-  ['1','2','3','4'].forEach(d=>{
+  if(H.downOk && effNow) ['1','2','3','4'].forEach(d=>{
     const nd=aggr(now.filter(p=>p['DN']===d));
     if(nd.n<4 || nd.eff==null) return;
     const bd=aggr(base.filter(p=>p['DN']===d));
-    if(hasBase && bd.eA>=COACH_MIN_BASE && bd.eff!=null){
+    if(hasBase && effCmp && bd.eA>=COACH_MIN_BASE && bd.eff!=null){
       const diff=Math.round(100*(nd.eff-bd.eff));
       if(Math.abs(diff)>=15)
         add(diff>0?'good':'bad', 'Down '+d+' is '+(diff>0?'better':'worse')+' than usual',
@@ -2276,35 +2542,39 @@ function coachFindings(focusGames, baseGames){
   Object.entries(nowCalls).forEach(([call,list])=>{
     if(list.length<COACH_MIN_NOW) return;
     const a=aggr(list), b=baseCalls[call]? aggr(baseCalls[call]) : null;
-    if(a.eff!=null && a.eff<=0.2 && list.length>=4){
-      add('bad','Stop going to '+call, list.length+' calls, '+pctS(a.eff)+' efficient, '+y1(a.ypp)+' yds/play today.');
+    if(!effNow){ /* nothing to say about a call without a working efficiency */ }
+    else if(a.eff!=null && a.eff<=0.2 && list.length>=4){
+      add('bad','Stop going to '+call, list.length+' calls, '+pctS(a.eff)+' efficient'+ypps(a)+' today.');
     } else if(a.eff!=null && a.eff>=0.7 && list.length>=3){
-      add('good',call+' is working', list.length+' calls at '+pctS(a.eff)+' and '+y1(a.ypp)+' yds/play.');
+      add('good',call+' is working', list.length+' calls at '+pctS(a.eff)+' efficient'+ypps(a)+'.');
     }
-    if(b && b.n>=COACH_MIN_BASE && (a.ypp-b.ypp)<=-3){
+    if(b && yppCmp && b.n>=COACH_MIN_BASE && (a.ypp-b.ypp)<=-3){
       add('bad',call+' is well down on its usual',
         y1(a.ypp)+' yds/play today against '+y1(b.ypp)+' over '+b.n+' calls this season.');
     }
   });
 
   // ---- something good you haven't used yet ----
-  if(hasBase){
+  if(hasBase && HB.effOk){
     const unused=Object.entries(baseCalls)
       .map(([call,list])=>({call, a:aggr(list)}))
       .filter(x=>x.a.n>=COACH_MIN_BASE && x.a.eff!=null && x.a.eff>=0.55 && !nowCalls[x.call])
       .sort((x,y)=>y.a.eff-x.a.eff)[0];
     if(unused)
       add('info','You haven’t called '+unused.call+' yet',
-        'It runs at '+pctS(unused.a.eff)+' and '+y1(unused.a.ypp)+' yds/play over '+unused.a.n+' calls this season.');
+        'It runs at '+pctS(unused.a.eff)+ (HB.gainOk? ' and '+y1(unused.a.ypp)+' yds/play' : '')
+        +' over '+unused.a.n+' calls this season.');
   }
 
   // ---- field position ----
-  const nowZones=groupBy(now, p=>{ const s=ylnToSpot(p['YARD LN']); return s==null?'':zoneOf(s); });
-  Object.entries(nowZones).forEach(([z,list])=>{
-    if(list.length<4) return;
-    const a=aggr(list);
-    if(a.eff!=null && a.eff<=0.3) add('bad','Struggling in the '+z.toLowerCase(), pctS(a.eff)+' on '+list.length+' plays there today.');
-  });
+  if(H.spotOk && effNow){
+    const nowZones=groupBy(now, p=>{ const s=ylnToSpot(p['YARD LN']); return s==null?'':zoneOf(s); });
+    Object.entries(nowZones).forEach(([z,list])=>{
+      if(list.length<4) return;
+      const a=aggr(list);
+      if(a.eff!=null && a.eff<=0.3) add('bad','Struggling in the '+z.toLowerCase(), pctS(a.eff)+' on '+list.length+' plays there today.');
+    });
+  }
 
   // ---- who's getting the ball ----
   const tg=now.filter(p=>p['RECEIVER']);
@@ -2324,7 +2594,8 @@ function coachFindings(focusGames, baseGames){
 
   const order={bad:0, info:1, good:2};
   F.sort((a,b)=>order[a.kind]-order[b.kind]);
-  return {findings:F, thin:false, nowN:now.length, baseN:base.length, hasBase:hasBase};
+  return {findings:F, thin:false, nowN:now.length, baseN:base.length, hasBase:hasBase,
+          health:H, baseHealth:HB};
 }
 
 /* ================= SELF-SCOUT =================
@@ -2402,10 +2673,10 @@ function tempoModel(games){
   (games||[]).forEach(g=>{
     const rows=(g.plays||[]).filter(p=>!p._divider && p._t);
     if(rows.length<2) return;
-    timed += rows.filter(p=>!p._opp).length;
+    timed += rows.filter(p=>!p._opp && !p._gap).length;
     span  += rows[rows.length-1]._t - rows[0]._t;
     const bySeries={};
-    rows.filter(p=>!p._opp).forEach(p=>{
+    rows.filter(p=>!p._opp && !p._gap).forEach(p=>{
       const k=p['SERIES']||'?';
       (bySeries[k]=bySeries[k]||[]).push(p);
     });
@@ -2449,16 +2720,24 @@ function renderCoach(){
   const r=coachFindings(focus, base);
   card.style.display='block';
   const label = focus.length===1 ? focus[0].name : focus.length+' games';
+  /* The reliability read goes first, on purpose. A coach who reads the findings
+     and only afterwards learns half the fields were empty has already made a
+     decision on them. */
+  const banner = healthNotes(r.health)
+    .map(x=>'<div class="safety '+(x.sev==='bad'?'bad':'warn')+'">'+esc(x.t)
+            +'<span class="sub">'+esc(x.d)+'</span></div>').join('');
   if(r.thin){
     $('coachSub').textContent = 'Not enough logged yet — '+r.nowN+' plays.';
-    $('coachBody').innerHTML='<div class="muted">Log a few more plays and this fills in.</div>';
+    $('coachBody').innerHTML = banner+'<div class="muted">Log a few more plays and this fills in.</div>';
   } else {
     $('coachSub').textContent = label+' · '+r.nowN+' plays'
       + (r.hasBase? ' · compared with '+r.baseN+' plays from your other games' : ' · no other games to compare with yet');
-    $('coachBody').innerHTML = r.findings.length
+    $('coachBody').innerHTML = banner + (r.findings.length
       ? r.findings.map(f=>'<div class="finding '+f.kind+'"><div class="dot"></div><div><div class="t">'
           +esc(f.title)+'</div><div class="d">'+esc(f.detail)+'</div></div></div>').join('')
-      : '<div class="muted">Nothing stands out — no call, down or zone is far enough off your normal to flag.</div>';
+      : '<div class="muted">'+(banner
+          ? 'With what’s missing above set aside, nothing else stands out.'
+          : 'Nothing stands out — no call, down or zone is far enough off your normal to flag.')+'</div>');
   }
   $('coachNote').textContent = 'Findings above are worked out on this device, no network needed. '
     + (projectId()
@@ -2467,10 +2746,15 @@ function renderCoach(){
 }
 
 /* ---- briefing: the same numbers, written for a model to read ---- */
-function tableFor(title, head, rows){
+function tableFor(title, head, rows, drop){
   if(!rows.length) return '';
-  return '\n### '+title+'\n| '+head.join(' | ')+' |\n|'+head.map(()=>'---').join('|')+'|\n'
-    + rows.map(r=>'| '+r.join(' | ')+' |').join('\n') + '\n';
+  let H=head, R=rows;
+  if(drop && drop.length){                 // a column with nothing behind it is worse than no column
+    const keep=head.map((h,i)=>drop.includes(h)?-1:i).filter(i=>i>=0);
+    H=keep.map(i=>head[i]); R=rows.map(r=>keep.map(i=>r[i]));
+  }
+  return '\n### '+title+'\n| '+H.join(' | ')+' |\n|'+H.map(()=>'---').join('|')+'|\n'
+    + R.map(r=>'| '+r.join(' | ')+' |').join('\n') + '\n';
 }
 function briefingText(){
   const {focus, base}=coachGames();
@@ -2488,6 +2772,20 @@ function briefingText(){
    + 'Tell me: what is working and should be called more, what should be dropped, what a defensive coordinator '
    + 'would spot on our film, and three concrete things to change next game. Be specific and use the numbers. '
    + 'Say when a sample is too small to trust rather than reading into it.\n\n';
+  /* The model can't see which taps were skipped, so it has to be told. Columns
+     that would be built on missing fields are removed rather than sent as
+     zeros — a zero looks like a fact. */
+  const H=r.health, HB=r.baseHealth, YP=H.gainOk, EF=H.effOk;
+  const dropY = [].concat(YP?[]:['Yds/play'], EF?[]:['Eff%','Season eff%','Season yds/play / eff%']);
+  const hn=healthNotes(H);
+  if(hn.length){
+    s+='## Data quality — read this first\n'
+     + 'This was tapped in live on a sideline and some fields were skipped:\n';
+    hn.forEach(x=>{ s+='- '+x.t+'. '+x.d.replace(/ Left out below\.| left out below\./,'')+'\n'; });
+    s+='Do not treat a missing field as a zero, and do not draw conclusions from any measure listed above '
+     + 'as unavailable. Columns that would have been built on it have been removed from the tables rather '
+     + 'than filled with zeros. Where a question can’t be answered from this data, say so.\n\n';
+  }
   s+='## Games in this report\n';
   focus.forEach(g=>{
     const opp = (g.opponent && !(g.name||'').toLowerCase().includes(g.opponent.toLowerCase())) ? ' vs '+g.opponent : '';
@@ -2495,43 +2793,52 @@ function briefingText(){
       +(g.usScore||0)+'–'+(g.oppScore||0)+', '+ourPlays(g).length+' plays logged\n'; });
   if(base.length) s+='\nSeason baseline for comparison: '+base.length+' other game(s), '+baseP.length+' offensive plays.\n';
   s+='\n## Totals\n';
-  s+='- This report: '+A.n+' plays, '+A.yds+' yards, '+y1(A.ypp)+' yds/play, '+pctS(A.eff)+' efficient, '
-     +A.td+' TD, '+A.to+' turnovers\n';
-  if(baseP.length) s+='- Season baseline: '+B.n+' plays, '+y1(B.ypp)+' yds/play, '+pctS(B.eff)+' efficient\n';
-  s+='\n(Efficient means the play gained 7+ yards, converted the line to gain, or scored.)\n';
+  s+='- This report: '+A.n+' plays, '+A.td+' TD, '+A.to+' turnovers'
+     + (EF? ', '+pctS(A.eff)+' efficient' : '')
+     + (YP? ', '+A.yds+' yards, '+y1(A.ypp)+' yds/play' : ' (yardage not logged)')+'\n';
+  if(baseP.length) s+='- Season baseline: '+B.n+' plays'
+     + (HB.effOk? ', '+pctS(B.eff)+' efficient' : '')
+     + (HB.gainOk? ', '+y1(B.ypp)+' yds/play' : '')+'\n';
+  if(EF||HB.effOk) s+='\n(Efficient means the play gained 7+ yards, converted the line to gain, or scored.)\n';
 
-  const dRows=['1','2','3','4'].map(d=>{
-    const a=aggr(now.filter(p=>p['DN']===d)); if(!a.n) return null;
-    const b=aggr(baseP.filter(p=>p['DN']===d));
-    return [d, a.n, y1(a.ypp), pctS(a.eff), b.n? pctS(b.eff):'—'];
-  }).filter(Boolean);
-  s+=tableFor('By down', ['Down','Plays','Yds/play','Eff%','Season eff%'], dRows);
+  if(H.downOk){
+    const dRows=['1','2','3','4'].map(d=>{
+      const a=aggr(now.filter(p=>p['DN']===d)); if(!a.n) return null;
+      const b=aggr(baseP.filter(p=>p['DN']===d));
+      return [d, a.n, y1(a.ypp), pctS(a.eff), b.n? pctS(b.eff):'—'];
+    }).filter(Boolean);
+    s+=tableFor('By down', ['Down','Plays','Yds/play','Eff%','Season eff%'], dRows, dropY);
+  }
 
   const callRows=Object.entries(groupBy(now,p=>p['OFF PLAY']))
     .map(([k,l])=>({k, a:aggr(l), b:aggr((groupBy(baseP,p=>p['OFF PLAY'])[k])||[])}))
     .sort((x,y)=>y.a.n-x.a.n).slice(0,15)
-    .map(x=>[x.k, x.a.n, y1(x.a.ypp), pctS(x.a.eff), x.a.td, x.b.n? y1(x.b.ypp)+' / '+pctS(x.b.eff) : '—']);
-  s+=tableFor('By play call (top 15)', ['Call','Times','Yds/play','Eff%','TD','Season yds/play / eff%'], callRows);
+    .map(x=>[x.k, x.a.n, y1(x.a.ypp), pctS(x.a.eff), x.a.td,
+             x.b.n? (HB.gainOk? y1(x.b.ypp)+' / ':'')+pctS(x.b.eff) : '—']);
+  s+=tableFor('By play call (top 15)',
+      ['Call','Times','Yds/play','Eff%','TD', HB.gainOk?'Season yds/play / eff%':'Season eff%'], callRows, dropY);
 
   const formRows=Object.entries(groupBy(now,p=>p['OFF FORM']))
     .map(([k,l])=>[k, l.length, y1(aggr(l).ypp), pctS(aggr(l).eff)]).sort((a,b)=>b[1]-a[1]);
-  s+=tableFor('By formation', ['Formation','Plays','Yds/play','Eff%'], formRows);
+  s+=tableFor('By formation', ['Formation','Plays','Yds/play','Eff%'], formRows, dropY);
 
-  const zoneRows=zoneBounds().map(z=>{
-    const l=now.filter(p=>{ const sp=ylnToSpot(p['YARD LN']); return sp!=null && zoneOf(sp)===z.name; });
-    return l.length? [z.name, l.length, y1(aggr(l).ypp), pctS(aggr(l).eff)] : null;
-  }).filter(Boolean);
-  s+=tableFor('By field position', ['Zone','Plays','Yds/play','Eff%'], zoneRows);
+  if(H.spotOk){
+    const zoneRows=zoneBounds().map(z=>{
+      const l=now.filter(p=>{ const sp=ylnToSpot(p['YARD LN']); return sp!=null && zoneOf(sp)===z.name; });
+      return l.length? [z.name, l.length, y1(aggr(l).ypp), pctS(aggr(l).eff)] : null;
+    }).filter(Boolean);
+    s+=tableFor('By field position', ['Zone','Plays','Yds/play','Eff%'], zoneRows, dropY);
+  }
 
   const tgtRows=Object.entries(groupBy(now.filter(p=>p['RECEIVER']),p=>p['RECEIVER']))
     .map(([k,l])=>[k, l.length, Math.round(100*l.length/now.filter(p=>p['RECEIVER']).length)+'%',
                    y1(aggr(l).ypp), pctS(aggr(l).eff)])
     .sort((a,b)=>b[1]-a[1]);
-  s+=tableFor('Targets', ['Player','Targets','Share','Yds/play','Eff%'], tgtRows);
+  s+=tableFor('Targets', ['Player','Targets','Share','Yds/play','Eff%'], tgtRows, dropY);
 
   const covRows=Object.entries(groupBy(now,p=>p['COVERAGE']))
     .map(([k,l])=>[k, l.length, y1(aggr(l).ypp), pctS(aggr(l).eff)]).sort((a,b)=>b[1]-a[1]);
-  if(covRows.length) s+=tableFor('Against coverage seen', ['Coverage','Plays','Yds/play','Eff%'], covRows);
+  if(covRows.length) s+=tableFor('Against coverage seen', ['Coverage','Plays','Yds/play','Eff%'], covRows, dropY);
   else s+='\n(Coverage was not tagged on these plays.)\n';
 
   if(sc){
@@ -2717,6 +3024,13 @@ function statsModel(){
     const dpRows=Object.entries(DP).sort((a,b)=>b[1].n-a[1].n).map(([k,d])=>[k,d.n,(d.yds/d.n).toFixed(1),d.eA?pct(d.eY,d.eA):'—']);
     if(dpRows.length) S.push({t:'Opponent play calls faced', head:['Their play','Plays','Yds/play','Opp eff%'], numFrom:1, rows:dpRows});
   }
+  /* The PDF gets read on a bus three days later, away from the app. If the
+     numbers behind it were thin, that has to travel with them. */
+  if(off.length){
+    const hn=healthNotes(dataHealth(off, games.reduce((s,g)=>s+gapRows(g).length,0)));
+    if(hn.length) S.unshift({t:'Data quality — read before the numbers',
+      text:hn.map(x=>x.t+'. '+x.d)});
+  }
   return {games:games, sections:S};
 }
 
@@ -2731,7 +3045,8 @@ function statsCsvText(){
   line('');
   m.sections.forEach(s=>{
     line(s.t.toUpperCase());
-    if(s.kv) s.kv.forEach(r=>line(r[0],r[1]));
+    if(s.text) s.text.forEach(t=>line(t));
+    else if(s.kv) s.kv.forEach(r=>line(r[0],r[1]));
     else { line.apply(null,s.head); s.rows.forEach(r=>line.apply(null,r)); }
     if(s.note) line(s.note);
     line('');
@@ -2756,7 +3071,9 @@ function exportStatsPDF(){
     +'<div class="psub">'+m.games.map(scoreLine).join(' &nbsp;·&nbsp; ')+'</div></div></div>';
   m.sections.forEach(s=>{
     h+='<h2>'+esc(s.t)+'</h2>';
-    if(s.kv){
+    if(s.text){
+      h+=s.text.map(t=>'<div class="psub" style="margin:0 0 6px">'+esc(t)+'</div>').join('');
+    } else if(s.kv){
       h+='<div class="kv">'+s.kv.map(r=>'<div><b>'+esc(String(r[1]))+'</b><span>'+esc(r[0])+'</span></div>').join('')+'</div>';
     } else {
       const nf=(s.numFrom==null?1:s.numFrom);
@@ -3116,7 +3433,12 @@ function alignToFilm(filmRows, plays){
     const map={};
     let ok=true;
     clips.forEach((p,i)=>{ if(!p._opp) { if(filmOdk[i]==='D') ok=false; map[i]=p; } });
-    if(ok) return {map:map, notes:notes, how:'opponent markers — row for row'};
+    if(ok){
+      const ng=ours.filter(p=>p._gap).length;
+      if(ng) notes.push(ng+' clip(s) are plays you marked missed — they stay blank on the film.');
+      return {map:map, notes:notes, how:'opponent markers — row for row',
+              placed:Object.keys(map).length, total:ours.length};
+    }
     notes.push('Markers are present but land on defensive clips, so drive shape was used instead.');
   }
   // --- route 2: match runs of offensive clips against possessions
@@ -3201,7 +3523,7 @@ $('fileFilm').addEventListener('change',async e=>{
     const oClips=film.rows.filter(r=>(r['ODK']||'').toUpperCase()!=='D').length;
     const placed=Object.keys(al.map).length;
     rep.innerHTML='<div class="playrow"><div class="desc"><div class="l1">'+film.rows.length+' clips · '+oClips+' offensive</div>'
-      +'<div class="l2">'+placed+' of '+ourPlays(g).length+' logged plays placed · matched by '+esc(al.how)+'</div></div></div>'
+      +'<div class="l2">'+placed+' of '+(al.total!=null? al.total : ourPlays(g).length)+' rows placed · matched by '+esc(al.how)+'</div></div></div>'
       + (al.notes.length? '<div class="l2" style="padding:6px 2px 0;color:var(--warn)">'+al.notes.map(esc).join('<br>')+'</div>'
                         : '<div class="l2" style="padding:6px 2px 0">Everything lined up.</div>');
     $('btnMergeDl').style.display='block';
@@ -3379,6 +3701,129 @@ $('fileRestore').addEventListener('change',e=>{
     }catch(err){ alert('Could not read backup: '+err.message); }
   };
   rd.readAsText(f);
+});
+
+/* ================= ADD ONE GAME FROM ANOTHER DEVICE =================
+   Restore is all-or-nothing, which is the right shape for "my tablet died"
+   and the wrong shape for "the other tablet logged Saturday morning". This
+   takes games out of a file one at a time and appends them, so two people
+   splitting a tournament end up with one season instead of two halves. */
+function importPlaysFromRows(rows){
+  return rows.map(r=>{
+    const p={}; COLS.forEach(c=>{ p[c] = r[c]==null? '' : String(r[c]).trim(); });
+    /* A D row carrying nothing but its ODK/TEAM/PLAY # is an opponent-snap
+       marker, not a play we logged. Restoring that flag keeps play counts,
+       stats and the coach's samples honest. */
+    const bare = COLS.every(c => ['ODK','TEAM','PLAY #'].includes(c) || !p[c]);
+    if(bare){
+      // a bare D row is an opponent snap; a bare O row is one of ours that went unlogged
+      if((p['ODK']||'').toUpperCase()==='D') p._opp=true;
+      else if((p['ODK']||'').toUpperCase()==='O') p._gap=true;
+    }
+    return p;
+  }).filter(p=>Object.keys(p).some(c=>c!=='_opp' && c!=='_gap' && p[c]));
+}
+/* A CSV has no score line, so read it back off the plays the same way the
+   logger counts them live. */
+function scoreFromPlays(plays){
+  let us=0, opp=0;
+  plays.forEach(p=>{
+    if(p._divider) return;
+    const mine = !p._opp && (p['ODK']||'')!=='D';
+    let pts=0;
+    if(isXPplay(p)) pts = GOOD_RESULTS.includes(p['RESULT']) ? (p['XP']==='2P'?2:1) : 0;
+    else if(/TD/.test(p['RESULT']||'')) pts = 6;
+    if(pts){ if(mine) us+=pts; else opp+=pts; }
+  });
+  return {us:us, opp:opp};
+}
+/* The export puts the team, the game name, the play count and LIVE into the
+   filename. Peel those back off and what's left is what the game was called. */
+function nameFromCsvFile(fname){
+  let n=fname.replace(/^.*[\\/]/,'').replace(/\.[^.]+$/,'')
+             .replace(/_?hudl$/i,'').replace(/_?merged$/i,'')
+             .replace(/_?LIVE$/i,'').replace(/_\d+plays?$/i,'')
+             .replace(/_?LIVE$/i,'')
+             .replace(/[_\-]?(20\d\d[-_]?\d\d[-_]?\d\d)$/,'');   // the date rides in its own field
+  const t=(db.settings.team||'').replace(/[^\w\-]+/g,'_');
+  if(t && n.toLowerCase().indexOf(t.toLowerCase()+'_')===0) n=n.slice(t.length+1);
+  n=n.replace(/_/g,' ').replace(/\s+/g,' ').trim();
+  return n || 'Imported game';
+}
+function dateFromGame(plays, fname){
+  const t=plays.map(p=>p._t).filter(Boolean).sort()[0];
+  if(t){ const d=new Date(t); if(!isNaN(d)) return d.toISOString().slice(0,10); }
+  const m=fname.match(/(20\d\d)[-_]?(\d\d)[-_]?(\d\d)/);
+  return m? m[1]+'-'+m[2]+'-'+m[3] : todayStr();
+}
+let importCandidates=[];
+function renderImportPick(){
+  const box=$('importPick'); box.innerHTML='';
+  if(!importCandidates.length) return;
+  box.appendChild(el('div',{class:'muted'},
+    'Tap Add on each game you want on this device. Nothing already here is touched.'));
+  importCandidates.forEach((c,i)=>{
+    const row=el('div',{class:'snaprow'});
+    const h=dataHealth((c.game.plays||[]).filter(p=>!p._divider && !p._opp && !p._gap && p['ODK']==='O'),
+                       (c.game.plays||[]).filter(p=>p._gap).length);
+    const flags=healthNotes(h).length? ' · logging gaps — the coach will say which' : '';
+    row.appendChild(el('div',{class:'txt'},
+      '<b>'+esc(c.game.name)+'</b>'+esc(c.game.date+' · '+ourPlays(c.game).length+' plays · '
+        +(c.game.usScore||0)+'–'+(c.game.oppScore||0)+(c.dupe?' · already on this device':'')+flags)));
+    const b=el('button',{type:'button'}, c.added? '✓ Added' : (c.dupe? 'Add anyway' : 'Add'));
+    if(c.added) b.disabled=true;
+    b.addEventListener('click',()=>{
+      if(c.added) return;
+      const g=JSON.parse(JSON.stringify(c.game));
+      g.id=uid();                                  // never collide with what's here
+      g.status='ended';                            // an imported game is finished, not live
+      db.games.push(g);
+      db.games.sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+      c.added=true;
+      save(); ensureGame(); renderTeam(); renderExport(); renderStats(); renderLog();
+      toast('Added '+g.name);
+      renderImportPick();
+    });
+    row.appendChild(b);
+    box.appendChild(row);
+  });
+}
+$('btnImportGame').addEventListener('click',()=>$('fileImport').click());
+$('fileImport').addEventListener('change',async e=>{
+  const f=e.target.files[0]; e.target.value='';
+  if(!f) return;
+  const box=$('importPick');
+  box.innerHTML='<div class="muted">Reading '+esc(f.name)+'…</div>';
+  importCandidates=[];
+  try{
+    if(/\.json$/i.test(f.name)){
+      const d=JSON.parse(await f.text());
+      if(!Array.isArray(d.games)) throw new Error('No games in that file — is it a backup from this app?');
+      const here=new Set(db.games.map(g=>(g.name||'')+'|'+(g.date||'')+'|'+ourPlays(g).length));
+      importCandidates=d.games
+        .filter(g=>(g.plays||[]).length)
+        .map(g=>({game:g, dupe:here.has((g.name||'')+'|'+(g.date||'')+'|'+ourPlays(g).length), added:false}));
+    } else {
+      const grid=parseCsvText(await f.text());
+      const t=gridToObjects(grid);
+      if(!t.cols.includes('ODK')) throw new Error('No ODK column — this doesn’t look like a play export.');
+      const plays=importPlaysFromRows(t.rows);
+      if(!plays.length) throw new Error('No plays in that file.');
+      const sc=scoreFromPlays(plays);
+      const name=nameFromCsvFile(f.name);
+      const g={id:uid(), name:name, date:dateFromGame(plays,f.name), opponent:'',
+               plays:plays, series:1, lastExport:plays.length,
+               usScore:sc.us, oppScore:sc.opp, status:'ended'};
+      renumber(g);
+      const here=new Set(db.games.map(x=>(x.name||'')+'|'+ourPlays(x).length));
+      importCandidates=[{game:g, dupe:here.has(name+'|'+ourPlays(g).length), added:false}];
+    }
+    if(!importCandidates.length) throw new Error('Nothing in that file had any plays in it.');
+    renderImportPick();
+  }catch(err){
+    box.innerHTML='<div class="l2" style="color:var(--bad)">'+esc(err.message||String(err))+'</div>';
+    importCandidates=[];
+  }
 });
 
 /* ================= Theme & wake lock ================= */
