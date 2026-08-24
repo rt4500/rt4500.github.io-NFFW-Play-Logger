@@ -331,6 +331,17 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
 .statfold[open] > summary{border-radius:14px 14px 0 0; box-shadow:none;}
 .statfold[open] > summary::after{content:'▾';}
 .statfold .foldbody{background:var(--card); border:1px solid var(--line); border-top:none; border-radius:0 0 14px 14px; padding:6px 12px 12px; box-shadow:var(--shadow);}
+/* the filter card reads as a status line while it's shut */
+.filtercard > summary{gap:10px;}
+.filtercard .fsum{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.filtercard .fsum.on{color:var(--accent);}
+.filtercard .fcount{font-size:.8rem; font-weight:700; color:var(--ink3); white-space:nowrap;}
+.filtercard .foldbody{padding-top:12px;}
+.filtercard .revfield{margin-bottom:10px;}
+.filtercard .revfield > label{margin-bottom:4px;}
+.chip .cn{font-size:.72rem; font-weight:800; opacity:.55; margin-left:3px;}
+.chip.on .cn{opacity:.85;}
+[data-bright="2"] .filtercard .fsum.on{color:#000; text-decoration:underline;}
 .lockgate{position:fixed; inset:0; z-index:100; background:var(--side); display:none; align-items:center; justify-content:center; padding:20px;}
 .lockgate.show{display:flex;}
 .lockcard{background:var(--card); color:var(--ink); border-radius:18px; padding:22px 20px; max-width:360px; width:100%; text-align:center; box-shadow:0 8px 30px rgba(0,0,0,.35);}
@@ -545,6 +556,7 @@ details summary{font-weight:800; padding:10px 4px; cursor:pointer; color:var(--a
       <button class="btn sec" id="btnExportStatsPdf">🧾 PDF</button>
     </div>
     <button class="btn sec" id="btnShareStats" data-share style="margin-top:8px">📤 Send stats to Drive / share…</button>
+    <div class="muted" id="statExpNote" style="display:none"></div>
     <div class="muted">PDF opens your device’s print sheet. To land it in Drive: on Android pick <b>Save to Google Drive</b> as the printer, on iPhone choose <b>Save as PDF</b> then the share icon → Drive.</div>
   </div>
   <div class="card" id="coachCard" style="display:none">
@@ -2112,8 +2124,54 @@ function passerRating(d){
   const e=cap(2.375-((d.int/att)*25));
   return ((a+b+c+e)/6)*100;
 }
-let statSel=null, statCov='';   // statSel = array of selected game ids (null = default to current game)
+let statSel=null;   // array of selected game ids (null = default to current game)
 let statFold={effPlay:true, byDown:true};   // remembers open/closed per session
+
+/* ================= STATS FILTER =================
+   One filtered list feeds every table on the screen, so "3rd down, in the
+   green zone, out of SPREAD" is three taps rather than a different report.
+   Values inside a dimension are OR'd (1st or 2nd down); dimensions are AND'd.
+   Deliberately screen-only: the PDF and the CSV keep covering every play in
+   the selected games, because a filtered sheet handed round a room stops
+   looking like a filtered sheet within about ten seconds. */
+let statF = {};                 // dimension key -> [selected values]
+const STAT_DIMS = [
+  {k:'dn',   label:'Down',       hide:'byDown',
+   of:p => isXPplay(p) ? 'Conversion' : (p['DN'] ? 'Down '+p['DN'] : ''),
+   order:['Down 1','Down 2','Down 3','Down 4','Conversion']},
+  {k:'dist', label:'Distance',   of:p => distBucket(p),
+   order:['Short (1–5)','Medium (6–12)','Long (13+)']},
+  {k:'zone', label:'Field zone', hide:'byField',
+   of:p => { const s=ylnToSpot(p['YARD LN']); return s==null? '' : zoneOf(s); },
+   order:()=>zoneBounds().map(z=>z.name)},
+  {k:'form', label:'Formation',  of:p => p['OFF FORM']},
+  {k:'play', label:'Play call',  hide:'effPlay', of:p => p['OFF PLAY']},
+  {k:'rec',  label:'Receiver',   of:p => p['RECEIVER']},
+  {k:'res',  label:'Result',     of:p => p['RESULT']},
+  {k:'cov',  label:'Coverage',   of:p => p['COVERAGE']}
+];
+const statOn = k => (statF[k]||[]);
+const statAny = () => STAT_DIMS.some(d=>statOn(d.k).length);
+/* Pinned = narrowed to exactly one value. A breakdown by a dimension you've
+   pinned is one row of itself, so it comes off the screen. Two or more values
+   still earn their table — that's a comparison. */
+const statPinned = k => statOn(k).length===1;
+/* exceptKey leaves one dimension out, which is what makes the chip counts
+   underneath it truthful: each option shows what you'd get by tapping it. */
+function applyStatF(plays, exceptKey){
+  if(!statAny()) return plays;
+  return plays.filter(p => STAT_DIMS.every(d=>{
+    if(d.k===exceptKey) return true;
+    const on=statF[d.k];
+    return (!on || !on.length) ? true : on.includes(d.of(p));
+  }));
+}
+function statFilterText(){
+  const parts=[];
+  STAT_DIMS.forEach(d=>{ const on=statOn(d.k); if(on.length) parts.push(on.join(' / ')); });
+  return parts.join(' · ');
+}
+const statTag = () => statAny()? ' · filtered' : '';
 function selectedGameIds(){
   const allIds=db.games.map(g=>g.id);
   if(statSel===null){ const g=game(); statSel = g? [g.id] : allIds.slice(); }
@@ -2143,13 +2201,28 @@ function renderStats(){
   $('statGamesCount').textContent = db.games.length? '('+gsel.length+' of '+db.games.length+')' : '';
   const plays = selectedPlays();
   const body=$('statsBody');
-  if(!plays.length){ statCov=''; body.innerHTML='<div class="card muted">No plays in the selected game(s). Tick one or more games above.</div>'; $('coachCard').style.display='none'; return; }
+  if(!plays.length){ statF={}; body.innerHTML='<div class="card muted">No plays in the selected game(s). Tick one or more games above.</div>'; $('coachCard').style.display='none'; return; }
   renderCoach();
   const num=v=>parseInt(v||'0',10)||0;
-  // coverage filter — "what works vs COVER X"
-  const covList=[...new Set(plays.filter(p=>p['ODK']!=='K').map(p=>p['COVERAGE']).filter(Boolean))].sort();
-  if(statCov && !covList.includes(statCov)) statCov='';
-  const sel = statCov ? plays.filter(p=>p['COVERAGE']===statCov) : plays;
+  /* Drop any pinned value that isn't in the data any more — a game got
+     unticked, a play was edited — so the filter can't silently show nothing. */
+  STAT_DIMS.forEach(d=>{
+    if(!statOn(d.k).length) return;
+    const have=new Set(plays.map(d.of).filter(Boolean));
+    statF[d.k]=statOn(d.k).filter(v=>have.has(v));
+    if(!statF[d.k].length) delete statF[d.k];
+  });
+  const sel = applyStatF(plays);
+  /* Said next to the buttons, not in a footnote: the CSV and the PDF cover
+     every play in the selected games however the screen is filtered. */
+  const expNote=$('statExpNote');
+  if(expNote){
+    expNote.style.display = statAny()? 'block' : 'none';
+    expNote.textContent = statAny()
+      ? 'A filter is on below. CSV and PDF still cover all '+plays.length+' plays in the selected game'
+        +(selectedGameIds().length>1?'s':'')+', not the '+sel.length+' on screen.'
+      : '';
+  }
   const off = sel.filter(p=>p['ODK']==='O');
   const def = sel.filter(p=>p['ODK']==='D');
   const primary = off.length? off : def;
@@ -2162,8 +2235,19 @@ function renderStats(){
   const effY=effPlays.filter(p=>p['EFF']==='Y').length;
   const pct=(a,b)=>b? Math.round(100*a/b)+'%':'—';
 
-  // coverage filter chips
-  let html='<div class="card" style="padding:10px"><label class="f" style="margin-top:0">SHOW PLAYS VS COVERAGE (defense = your call)</label><div class="chips" id="covFilter"></div></div>';
+  // ---- filter card: collapsed it's a summary, open it's the chip rows ----
+  let html='<details class="statfold filtercard" data-fold="filters"'+(statFold.filters?' open':'')+'>'
+    +'<summary>'+(statAny()
+        ? '<span class="fsum on">▣ '+esc(statFilterText())+'</span>'
+          +'<span class="fcount">'+sel.length+' of '+plays.length+' plays</span>'
+        : '<span class="fsum">▢ Filter plays</span><span class="fcount">all '+plays.length+'</span>')
+    +'</summary><div class="foldbody" id="statFilters"></div></details>';
+  if(!sel.length){
+    body.innerHTML = html + '<div class="card muted">Nothing matches that combination. '
+      + 'Open the filter above and widen it, or clear it.</div>';
+    wireStatFilters(plays);
+    return;
+  }
   html+='<div class="tiles">'
     +'<div class="tile"><div class="v">'+primary.length+'</div><div class="k">'+(isDef?'Def plays':'Plays')+'</div></div>'
     +'<div class="tile"><div class="v">'+yards+'</div><div class="k">'+(isDef?'Yds allowed':'Yards')+'</div></div>'
@@ -2172,6 +2256,13 @@ function renderStats(){
     +'<div class="tile"><div class="v">'+pct(effY,effPlays.length)+'</div><div class="k">'+(isDef?'Opp eff%':'Efficient')+'</div></div>'
     +'<div class="tile"><div class="v">'+(primary.length? (yards/primary.length).toFixed(1):'—')+'</div><div class="k">Yds/play</div></div>'
     +'</div>';
+  /* Filters make it easy to slice until a number looks alarming. Say how much
+     one play is worth down here, so nobody rebuilds a game plan on four snaps. */
+  if(statAny() && primary.length && primary.length<12){
+    html+='<div class="card muted" style="padding:9px 12px">Thin slice — '+primary.length+' play'
+      +(primary.length>1?'s':'')+'. One play moves every percentage above by about '
+      +Math.round(100/primary.length)+' points.</div>';
+  }
 
   function barBlock(title, rows, fmt){
     if(!rows.length) return '';
@@ -2207,7 +2298,7 @@ function renderStats(){
     return Object.entries(m).map(([name,d])=>({name,val:d.n?d.y/d.n:0,d}))
       .filter(r=>r.d.n>=(min||2)).sort((a,b)=>b.val-a.val||b.d.n-a.d.n).slice(0,10);
   }
-  const covTag = statCov ? ' vs '+statCov : '';
+  const covTag = statTag();
 
   // ---- Offense breakdowns (ODK = O) ----
   if(off.length){
@@ -2226,11 +2317,11 @@ function renderStats(){
         +'<div class="l2">'+d.n+' call'+(d.n>1?'s':'')+' · '+avg+' yds/play · '+d.yds+' yds'+extra+'</div></div>'
         +'<div class="gain">'+effTxt+'</div></div>';
     }).join('');
-    html+=fold('effPlay', 'Stats by play call'+covTag, pcRows);
+    if(!statPinned('play')) html+=fold('effPlay', 'Stats by play call'+covTag, pcRows);
     html+=barBlock('Best formation + play'+covTag+' (min 2)', groupEffBy(off,p=>(p['OFF FORM']&&p['OFF PLAY'])?p['OFF FORM']+' · '+p['OFF PLAY']:'', 2), r=>Math.round(r.val*100)+'% ('+r.d.n+')');
-    html+=barBlock('Efficiency by formation'+covTag, groupEffBy(off,p=>p['OFF FORM']), r=>Math.round(r.val*100)+'% ('+r.d.n+')');
-    if(!statCov){
-      html+=barBlock('Efficiency by coverage seen (min 2)', groupEffBy(off,p=>p['COVERAGE']), r=>Math.round(r.val*100)+'% ('+r.d.n+')');
+    if(!statPinned('form')) html+=barBlock('Efficiency by formation'+covTag, groupEffBy(off,p=>p['OFF FORM']), r=>Math.round(r.val*100)+'% ('+r.d.n+')');
+    if(!statPinned('cov')) html+=barBlock('Efficiency by coverage seen (min 2)', groupEffBy(off,p=>p['COVERAGE']), r=>Math.round(r.val*100)+'% ('+r.d.n+')');
+    if(!statPinned('dn')){
       const downs={};
       off.forEach(p=>{ const d=p['DN']; if(!d||d==='0') return; downs[d]=downs[d]||{n:0,y:0,yds:0}; downs[d].n++; if(p['EFF']==='Y')downs[d].y++; downs[d].yds+=num(p['GN/LS']); });
       const dr=Object.keys(downs).sort();
@@ -2254,7 +2345,7 @@ function renderStats(){
           +'<div class="gain">'+(d.eA?Math.round(100*d.eY/d.eA)+'%':'—')+'</div></div>';
       });
       if(fg.untracked) fbody+='<div class="l2" style="padding:4px 2px 0">'+fg.untracked+' play'+(fg.untracked>1?'s':'')+' with no yard line — not counted here.</div>';
-      html+=fold('byField', 'By field position'+covTag, fbody);
+      if(!statPinned('zone')) html+=fold('byField', 'By field position'+covTag, fbody);
     }
     const sc=selfScout(off);
     if(sc){
@@ -2277,7 +2368,8 @@ function renderStats(){
       sbody+='<div class="l2" style="padding:4px 2px 0">Percentages are how often that call comes up in that situation. Buckets under '+SCOUT_MIN+' plays are marked thin.</div>';
       html+=fold('scout', '🕵️ Self-scout — what your film gives away', sbody);
     }
-    const tm=tempoModel(db.games.filter(g=>selectedGameIds().includes(g.id)));
+    // tempo is a property of the whole game, so it can't answer a filtered question
+    const tm=statAny()? null : tempoModel(db.games.filter(g=>selectedGameIds().includes(g.id)));
     if(tm){
       let tbody='';
       tm.kv.forEach(([k,v])=>{ tbody+='<div class="playrow"><div class="desc"><div class="l1">'+esc(k)+'</div></div><div class="gain">'+esc(String(v))+'</div></div>'; });
@@ -2297,7 +2389,7 @@ function renderStats(){
       +(dEffP.length?Math.round(100*dEffP.filter(p=>p['EFF']==='Y').length/dEffP.length):0)+'% opp efficient · '
       +Math.round(100*dStops/def.length)+'% forced incompletions</div>';
     html+='</div>';
-    if(!statCov) html+=barBlock('Opp efficiency vs our coverage (min 2, lower=better)', groupEffBy(def,p=>p['COVERAGE']), r=>Math.round(r.val*100)+'% ('+r.d.n+')');
+    if(!statPinned('cov')) html+=barBlock('Opp efficiency vs our coverage (min 2, lower=better)', groupEffBy(def,p=>p['COVERAGE']), r=>Math.round(r.val*100)+'% ('+r.d.n+')');
     html+=barBlock('Opp efficiency by their play call (min 2)', groupEffBy(def,p=>p['OFF PLAY']), r=>Math.round(r.val*100)+'% ('+r.d.n+')');
     html+=barBlock('Opp formations faced', (function(){const m={};def.forEach(p=>{if(p['OFF FORM'])m[p['OFF FORM']]=(m[p['OFF FORM']]||0)+1;});return Object.entries(m).map(([name,val])=>({name,val})).sort((a,b)=>b.val-a.val);})(), r=>r.val);
   }
@@ -2347,17 +2439,61 @@ function renderStats(){
     });
     html+='</div>';
   }
-  if(!statCov){
+  if(!statPinned('cov')){
     const covs={};
     off.forEach(p=>{ if(p['COVERAGE']) covs[p['COVERAGE']]=(covs[p['COVERAGE']]||0)+1; });
     html+=barBlock('Coverages seen', Object.entries(covs).map(([name,val])=>({name,val})).sort((a,b)=>b.val-a.val), r=>r.val);
   }
   body.innerHTML=html;
-  // wire the coverage filter chips (element now exists in the DOM)
-  const covOpts=[{label:'All',v:''}].concat(covList.map(c=>({label:c,v:c})));
-  chipRow($('covFilter'), covOpts, o=>statCov===o.v, o=>{ statCov=o.v; renderStats(); });
+  wireStatFilters(plays);
+}
+/* The chip rows, built after the card is in the DOM. Each dimension's options
+   are counted against the OTHER active filters, so the number on a chip is
+   what you'll actually get, and an option that would empty the screen isn't
+   offered at all. */
+function wireStatFilters(plays){
+  const box=$('statFilters');
+  if(box){
+    box.innerHTML='';
+    STAT_DIMS.forEach(d=>{
+      const pool=applyStatF(plays, d.k);
+      const counts={};
+      pool.forEach(p=>{ const v=d.of(p); if(v) counts[v]=(counts[v]||0)+1; });
+      let vals=Object.keys(counts);
+      if(!vals.length) return;
+      const ord = typeof d.order==='function' ? d.order() : d.order;
+      vals = ord ? ord.filter(v=>counts[v]).concat(vals.filter(v=>!ord.includes(v)).sort())
+                 : vals.sort((a,b)=>counts[b]-counts[a] || a.localeCompare(b));
+      const w=el('div',{class:'revfield'+(statOn(d.k).length?' missing':'')});
+      w.innerHTML='<label>'+esc(d.label)+(statOn(d.k).length? ' — '+statOn(d.k).length+' selected':'')+'</label>';
+      const c=el('div',{class:'chips'});
+      if(vals.length>12){ const sb=el('div',{class:'scrollbox'}); sb.appendChild(c); w.appendChild(sb); }
+      else w.appendChild(c);
+      box.appendChild(w);
+      vals.forEach(v=>{
+        const on=statOn(d.k).includes(v);
+        const chip=el('button',{class:'chip sm'+(on?' on':''),type:'button'},
+          esc(v)+' <span class="cn">'+counts[v]+'</span>');
+        chip.addEventListener('click',()=>{
+          buzz(8);
+          const cur=statOn(d.k);
+          const next = on ? cur.filter(x=>x!==v) : cur.concat([v]);
+          if(next.length) statF[d.k]=next; else delete statF[d.k];
+          renderStats();
+        });
+        c.appendChild(chip);
+      });
+    });
+    if(statAny()){
+      const b=el('button',{class:'btn sec',type:'button'},'✕ Clear all filters');
+      b.addEventListener('click',()=>{ statF={}; renderStats(); });
+      box.appendChild(b);
+    } else if(!box.children.length){
+      box.appendChild(el('div',{class:'muted'},'Nothing to filter on in these plays yet.'));
+    }
+  }
   // remember which collapsible sections are open/closed
-  body.querySelectorAll('.statfold').forEach(d=>d.addEventListener('toggle',()=>{ statFold[d.dataset.fold]=d.open; }));
+  $('statsBody').querySelectorAll('.statfold').forEach(d=>d.addEventListener('toggle',()=>{ statFold[d.dataset.fold]=d.open; }));
 }
 
 /* ---- shared stats model: one place that computes the numbers, used by CSV + PDF ---- */
@@ -2739,7 +2875,13 @@ function renderCoach(){
           ? 'With what’s missing above set aside, nothing else stands out.'
           : 'Nothing stands out — no call, down or zone is far enough off your normal to flag.')+'</div>');
   }
-  $('coachNote').textContent = 'Findings above are worked out on this device, no network needed. '
+  /* The coach compares these games against the rest of the season, so a play
+     filter has nothing to compare against — it reads whole games and says so,
+     rather than quietly appearing to answer a question it wasn't asked. */
+  $('coachNote').textContent = (statAny()
+      ? 'The filter below doesn’t apply here — the coach compares whole games against your season. '
+      : '')
+    + 'Findings above are worked out on this device, no network needed. '
     + (projectId()
         ? 'Open in Claude copies the briefing and opens your project.'
         : 'Open in Claude starts a chat with the briefing already filled in.');
