@@ -1,0 +1,16 @@
+# Cloudflare Worker config for auto-deploy via GitHub Actions.
+# ONE-TIME SETUP:
+#   1. Replace the KV id below: Cloudflare dashboard -> Storage & Databases -> KV
+#      -> your namespace -> copy its ID.
+#   2. In GitHub repo -> Settings -> Secrets and variables -> Actions, add:
+#        CLOUDFLARE_API_TOKEN   (dashboard -> profile -> API Tokens -> Create ->
+#                                template "Edit Cloudflare Workers")
+#        CLOUDFLARE_ACCOUNT_ID  (dashboard right sidebar on the overview page)
+# After that, every push touching worker.js deploys it automatically.
+name = "flagstats-live"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+keep_vars = true   # NEVER overwrite KEYS/TOKEN set in the dashboard
+[[kv_namespaces]]
+binding = "LIVE"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"

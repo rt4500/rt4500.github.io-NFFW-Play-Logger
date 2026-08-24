@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nations Cup — Admin</title>
+<meta name="theme-color" content="#14171C">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src https://flagstats-live.trizzey11.workers.dev; base-uri 'self'; form-action 'self'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex,nofollow">
+<style>
+  :root{--bg:#14171C;--panel:#1D222A;--panel2:#262D37;--line:#333B46;--ink:#EDF1F5;
+    --muted:#8A95A3;--green:#1FA35F;--amber:#F2B138;--red:#E5484D;--blue:#4C86F0;
+    --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);padding:14px;max-width:640px;margin:0 auto}
+  h1{font-size:18px;margin:6px 0 2px}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+  input[type=password],input[type=number]{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit}
+  input[type=number]{width:64px;text-align:center;font-family:var(--mono);font-weight:800}
+  .btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:9px 14px;font:inherit;font-weight:700;cursor:pointer}
+  .btn.blue{background:var(--blue);border-color:transparent}
+  .btn.green{background:var(--green);border-color:transparent}
+  .btn.red{background:var(--red);border-color:transparent}
+  .btn.sm{padding:6px 10px;font-size:12px}
+  .row{border-top:1px solid var(--line);padding:12px 0}
+  .row:first-child{border-top:none}
+  .gname{font-weight:800}
+  .meta{color:var(--muted);font-size:11.5px;margin:2px 0 8px}
+  .ovbadge{display:inline-block;background:var(--amber);color:#111;font-size:10px;font-weight:800;padding:1px 6px;border-radius:6px;margin-left:6px}
+  .finalBadge{display:inline-block;background:var(--green);color:#fff;font-size:10px;font-weight:800;padding:1px 6px;border-radius:6px;margin-left:6px}
+  .editRow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .status{color:var(--muted);font-size:12px;margin-top:8px}
+  label{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:5px}
+</style>
+</head>
+<body>
+<h1>Nations Cup — Admin</h1>
+<div class="sub">Result corrections · affects the public live display only, never a tablet's local games</div>
+<div class="card" id="loginCard">
+  <div style="font-weight:800;margin-bottom:8px">Admin key</div>
+  <div class="editRow">
+    <input type="password" id="keyIn" placeholder="boss-…" style="flex:1">
+    <button class="btn blue" onclick="saveKey()">Unlock</button>
+  </div>
+  <div class="status" id="loginStatus"></div>
+</div>
+<div class="card" id="listCard" style="display:none">
+  <div class="editRow" style="justify-content:space-between">
+    <div style="font-weight:800">Live server entries</div>
+    <div><button class="btn sm" onclick="loadList()">Refresh</button>
+    <button class="btn sm" onclick="logout()">Lock</button></div>
+  </div>
+  <div id="list"></div>
+</div>
+<script>
+const RELAY='https://flagstats-live.trizzey11.workers.dev';
+function esc(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function deriveState(plays,s){
+  let home=0,away=0,possession='home',spot=s.startYardLine,down=1;
+  let seriesCrossedMid=false,awaitingPAT=false,patTeam=null;
+  const add=(t,n)=>{t==='home'?home+=n:away+=n;};
+  const newPoss=()=>{possession=possession==='home'?'away':'home';spot=s.startYardLine;down=1;seriesCrossedMid=false;};
+  for(const p of plays){
+    if(p.type==='pat'){ if(awaitingPAT&&patTeam&&p.pat&&p.pat.good) add(patTeam,p.pat.type==='2'?2:1);
+      if(awaitingPAT){ awaitingPAT=false; newPoss(); } continue; }
+    if(p.type==='safety'){ add(possession==='home'?'away':'home',2); newPoss(); continue; }
+    if(p.type==='adjust'){
+      if(p.setPossession) possession=p.setPossession;
+      if(typeof p.setSpot==='number') spot=Math.max(0,Math.min(s.fieldLength,p.setSpot));
+      if(typeof p.setDown==='number') down=Math.max(1,Math.min(s.downsPerSeries,p.setDown));
+      seriesCrossedMid=(typeof p.setCrossedMid==='boolean')?p.setCrossedMid:(spot>=s.midfield);
+      if(p.addHome) home+=p.addHome; if(p.addAway) away+=p.addAway;
+      awaitingPAT=false; patTeam=null; continue;
+    }
+    if(p.type==='penalty'){ const y=p.penalty.yards||0;
+      if(p.penalty.on==='def'){ const half=(s.fieldLength-spot)/2; spot=spot+Math.min(y,half); }
+      else { const half=spot/2; spot=spot-Math.min(y,half); }
+      spot=Math.max(0,Math.min(s.fieldLength,Math.round(spot)));
+      // Crossing the midline via penalty earns the fresh set of downs — but only once
+      // per series: being pushed back behind midline does NOT reset it.
+      if(!seriesCrossedMid && spot>=s.midfield){ seriesCrossedMid=true; down=1; }
+      if(p.penalty.autoFirst) down=1;
+      if(p.penalty.lossOfDown){ down+=1; if(down>s.downsPerSeries) newPoss(); }
+      continue; }
+    const start=(typeof p.startSpot==='number')?p.startSpot:spot;
+    let end=(typeof p.endSpot==='number')?p.endSpot:start;
+    if(p.interception){ possession=possession==='home'?'away':'home';
+      const ret=(p.intReturnEndSpot!=null)?p.intReturnEndSpot:(s.fieldLength-start);
+      if(ret>=s.fieldLength){ // pick-6
+        add(possession,6); awaitingPAT=true; patTeam=possession; continue;
+      }
+      spot=Math.max(0,Math.min(s.fieldLength,ret));
+      down=1; seriesCrossedMid=spot>=s.midfield; continue; }
+    if(p.touchdown||end>=s.fieldLength){ add(possession,6); awaitingPAT=true; patTeam=possession; continue; }
+    spot=Math.max(0,Math.min(s.fieldLength,end));
+    if(!seriesCrossedMid&&spot>=s.midfield){ seriesCrossedMid=true; down=1; }
+    else{ down+=1; if(down>s.downsPerSeries) newPoss(); }
+  }
+  const target=seriesCrossedMid?s.fieldLength:s.midfield;
+  return{home,away,possession,spot,down,seriesCrossedMid,target,distance:Math.max(0,target-spot),awaitingPAT,patTeam};
+}let KEY='';
+try{ KEY=localStorage.getItem('fs_admin_key')||''; }catch(e){}
+async function verify(k){
+  try{ const r=await fetch(RELAY+'/ping?k='+encodeURIComponent(k),{cache:'no-store'});
+    const j=await r.json(); return j&&j.ok&&j.role==='admin'; }catch(e){ return null; }
+}
+async function saveKey(){
+  const k=document.getElementById('keyIn').value.trim();
+  const st=document.getElementById('loginStatus');
+  st.textContent='Checking…';
+  const ok=await verify(k);
+  if(ok===null){ st.textContent='Could not reach the server — check your connection.'; return; }
+  if(!ok){ st.textContent='That key is not an admin key.'; return; }
+  KEY=k; try{ localStorage.setItem('fs_admin_key',k); }catch(e){}
+  show(); loadList();
+}
+function logout(){ KEY=''; try{ localStorage.removeItem('fs_admin_key'); }catch(e){} show(); }
+function show(){
+  document.getElementById('loginCard').style.display=KEY?'none':'';
+  document.getElementById('listCard').style.display=KEY?'':'none';
+}
+function scoreOf(rec){
+  const g=rec.game;
+  const d=deriveState(g.plays||[], g.settings||{fieldLength:50,midfield:25,downsPerSeries:4,startYardLine:5});
+  return rec.override ? {home:+rec.override.home||0, away:+rec.override.away||0, derived:d}
+                      : {home:d.home, away:d.away, derived:d};
+}
+async function loadList(){
+  const box=document.getElementById('list');
+  box.innerHTML='<div class="status">Loading…</div>';
+  let recs=[];
+  try{ const r=await fetch(RELAY+'/g',{cache:'no-store'}); const arr=await r.json();
+    recs=(Array.isArray(arr)?arr:[]).filter(x=>x&&x.game&&x._slot);
+  }catch(e){ box.innerHTML='<div class="status">Could not reach the server.</div>'; return; }
+  if(!recs.length){ box.innerHTML='<div class="status">Server is empty.</div>'; return; }
+  box.innerHTML='';
+  recs.sort((a,b)=>(b.updated||0)-(a.updated||0)).forEach(rec=>{
+    const g=rec.game, sc=scoreOf(rec);
+    const ns=String(rec._slot).split(':')[1]||'?';
+    const fin=rec.override?rec.override.finished:!!g.finished;
+    const row=document.createElement('div'); row.className='row';
+    row.innerHTML=
+      '<div class="gname">'+esc(g.teams.home.name)+' '+sc.home+'–'+sc.away+' '+esc(g.teams.away.name)+
+      (fin?'<span class="finalBadge">FINAL</span>':'')+(rec.override?'<span class="ovbadge">CORRECTED</span>':'')+'</div>'+
+      '<div class="meta">'+esc(g.name||'no label')+' · '+(g.plays||[]).length+' plays · from '+esc(ns)+
+      (rec.override?' · logged score '+sc.derived.home+'–'+sc.derived.away:'')+'</div>'+
+      '<div class="editRow">'+
+        '<input type="number" min="0" max="199" value="'+sc.home+'" data-f="h"> – '+
+        '<input type="number" min="0" max="199" value="'+sc.away+'" data-f="a">'+
+        '<label><input type="checkbox" data-f="fin" '+(fin?'checked':'')+'> final</label>'+
+        '<button class="btn sm green" data-act="save">Save correction</button>'+
+        (rec.override?'<button class="btn sm" data-act="clear">Revert to logged</button>':'')+
+        '<button class="btn sm red" data-act="del">Remove</button>'+
+      '</div>';
+    row.querySelector('[data-act=save]').onclick=async()=>{
+      const h=+row.querySelector('[data-f=h]').value||0;
+      const a=+row.querySelector('[data-f=a]').value||0;
+      const fin2=row.querySelector('[data-f=fin]').checked;
+      await patch(rec._slot,{override:{home:h,away:a,finished:fin2}});
+    };
+    const clr=row.querySelector('[data-act=clear]');
+    if(clr) clr.onclick=async()=>{ await patch(rec._slot,{}); };
+    row.querySelector('[data-act=del]').onclick=async()=>{
+      if(!confirm('Remove this entry from the public live display?')) return;
+      try{ const r=await fetch(RELAY+'/g/admin?k='+encodeURIComponent(KEY)+'&slot='+encodeURIComponent(rec._slot),{method:'DELETE'});
+        if(!r.ok) alert('Failed: '+r.status);
+      }catch(e){ alert('Failed — offline?'); }
+      loadList();
+    };
+    box.appendChild(row);
+  });
+}
+async function patch(slot,body){
+  try{
+    const r=await fetch(RELAY+'/g/admin?k='+encodeURIComponent(KEY)+'&slot='+encodeURIComponent(slot)+'&override=1',
+      {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!r.ok) alert('Failed: '+r.status);
+  }catch(e){ alert('Failed — offline?'); }
+  loadList();
+}
+(async()=>{ show(); if(KEY){ const ok=await verify(KEY); if(ok){ loadList(); } else if(ok===false){ logout(); } else { show(); } } })();
+</script>
+</body>
+</html>
