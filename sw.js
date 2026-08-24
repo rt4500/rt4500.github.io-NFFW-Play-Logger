@@ -2,7 +2,7 @@
    Strategy: NETWORK-FIRST. When online you always get the freshest files
    (handy while iterating), and the latest good copy is cached so the app
    still opens with no connection (arena wifi). Bump CACHE to force a refresh. */
-const CACHE = 'flag-stats-v58';
+const CACHE = 'flag-stats-v59';
 const ASSETS = [
   './',
   './index.html',

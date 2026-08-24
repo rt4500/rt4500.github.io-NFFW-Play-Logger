@@ -126,6 +126,13 @@
   .modal .mt2{font-weight:800;font-size:15px;margin-bottom:8px}
   .modal .warn{color:var(--red);font-weight:700;font-size:12px;margin:6px 0}
   .finalBadge{display:inline-block;background:var(--green);color:#fff;font-size:10px;font-weight:800;letter-spacing:.06em;padding:2px 7px;border-radius:6px;margin-left:6px;vertical-align:middle}
+  .resDay{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:10px 0 4px;font-weight:700}
+  .resRow{display:flex;align-items:center;gap:8px;padding:7px 2px;border-bottom:1px solid var(--line);font-size:12.5px;cursor:pointer}
+  .resMeta{color:var(--muted);font-family:var(--mono);font-size:10px;min-width:74px}
+  .resTeams{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .resScore{font-family:var(--mono);font-weight:800}
+  .resRow .win{font-weight:800}
+  .resX{color:var(--amber)}
   /* Live now (Tournament tab) */
   .liveCard{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px;background:var(--panel2);cursor:pointer;transition:border-color .15s}
   .liveCard:active{border-color:var(--amber)}
@@ -1091,7 +1098,7 @@ function defenderRow(g,defSide){
   wrap.appendChild(playerPicker(rosterOf(g,defSide),ui.pending.flagPullBy,pid=>{ui.pending.flagPullBy=pid;commit();}));
   return wrap;
 }
-const APP_VERSION='v58';
+const APP_VERSION='v59';
 const IOC_CODES={'Switzerland':'SUI','Ireland':'IRL','Sweden':'SWE','Ukraine':'UKR','Poland':'POL','Czechia':'CZE','Finland':'FIN','Germany':'GER','Austria':'AUT','France':'FRA','Italy':'ITA','Great Britain':'GBR'};
 /* Flag color stripes per nation — lets a spotter recognize the end zone by color,
    not just by reading the label. Ordered top-to-bottom as on the real flag. */
@@ -2106,6 +2113,30 @@ function renderTourney(){
         box.style.padding='0 4px 10px'; lc0.appendChild(box);
       }
     });
+    // finished games: one compact line each, grouped by day
+    if(doneEnt.length){
+      const dayOf=g=>{const n=g.name||''; return n.indexOf('Fri')===0?'Friday':(n.indexOf('Sat')===0?'Saturday':'Sunday · Bracket');};
+      const groups={}; const order=['Friday','Saturday','Sunday · Bracket'];
+      doneEnt.forEach(e=>{ const d=dayOf(e[1].game); (groups[d]=groups[d]||[]).push(e); });
+      order.forEach(day=>{
+        if(!groups[day]) return;
+        lc0.appendChild(h(`<div class="resDay">${day}</div>`));
+        groups[day].sort((a,b)=>String(a[1].game.name||'').localeCompare(String(b[1].game.name||'')));
+        groups[day].forEach(([dev,rec])=>{
+          const g=rec.game; const st0=deriveState(g.plays,g.settings);
+          const st=g.__ov?{...st0,home:g.__ov.home,away:g.__ov.away}:st0;
+          const t=(g.name||'').replace(/^(Fri 21\.8|Sat 22\.8|Sun 23\.8)\s*/,'').replace('Field ','F');
+          const hw=st.home>st.away, aw=st.away>st.home;
+          const row=h(`<div class="resRow">
+            <span class="resMeta">${esc(t)}</span>
+            <span class="resTeams"><span class="${hw?'win':''}">${esc(g.teams.home.name)}</span> <span class="resScore">${st.home}–${st.away}</span> <span class="${aw?'win':''}">${esc(g.teams.away.name)}</span></span>
+            <span class="resX">${liveExpand[dev]?'▴':'▾'}</span></div>`);
+          row.onclick=()=>{ liveExpand[dev]=!liveExpand[dev]; render(); };
+          lc0.appendChild(row);
+          if(liveExpand[dev]){ const box=buildBoxScore(g); box.style.padding='0 4px 10px'; lc0.appendChild(box); }
+        });
+      });
+    }
     const rf=h(`<button class="btn sm ghost" style="margin-top:4px">Refresh now</button>`);
     rf.onclick=()=>{ toast('Checking…'); fetchLive(true); };
     lc0.appendChild(rf);
@@ -2181,7 +2212,8 @@ function renderTourney(){
     sc.appendChild(h(t));
     sc.appendChild(h(`<div class="help" style="margin-top:6px">Win percentage (draws count half) · computed from loaded games only.</div>`));
     const finals=dd.games.filter(g=>g.finished).length;
-    if(standings.length>=7 && finals>0){
+    const brkGames=dd.games.filter(g=>{const n=g.name||''; return n.indexOf('Fri')!==0 && n.indexOf('Sat')!==0;});
+    if(standings.length>=7 && finals>0 && !brkGames.length){
       const bb=h(`<button class="btn sm green" style="margin-top:8px">Create Sunday bracket (3 QFs) on this device</button>`);
       bb.onclick=()=>{
         const pairs=`QF2: <b>${esc(standings[3].team)}</b> vs <b>${esc(standings[4].team)}</b><br>QF3: <b>${esc(standings[1].team)}</b> vs <b>${esc(standings[6].team)}</b><br>QF4: <b>${esc(standings[2].team)}</b> vs <b>${esc(standings[5].team)}</b><br><br>1st seed <b>${esc(standings[0].team)}</b> has a bye into SF1.`;
@@ -2193,6 +2225,36 @@ function renderTourney(){
       sc.appendChild(h(`<div class="help" style="margin-top:4px">Semis &amp; final: create after the QFs are played (teams depend on results).</div>`));
     }
     root.appendChild(sc);
+  }
+
+  // Real bracket with results (replaces the seed preview once bracket games exist)
+  {
+    const brk=dd.games.filter(g=>{const n=g.name||''; return n.indexOf('Fri')!==0 && n.indexOf('Sat')!==0;});
+    if(brk.length){
+      const pairOf=g=>[g.teams.home.name,g.teams.away.name].sort().join('|');
+      const ROUNDS=[['Final','Czechia|Ukraine'],['3rd place','Finland|Switzerland'],
+        ['Semi Final 1','Switzerland|Ukraine'],['Semi Final 2','Czechia|Finland'],
+        ['Quarter Final 2','Ireland|Switzerland'],['Quarter Final 3','Finland|Sweden'],
+        ['Quarter Final 4','Czechia|Poland'],
+        ['Place 5–7','Ireland|Sweden'],['Place 5–7','Poland|Sweden'],['Place 5–7','Ireland|Poland']];
+      const bc=h(`<div class="card"><h3>Bracket</h3></div>`);
+      let t=`<table class="stTable"><tbody>`; let champ=null;
+      ROUNDS.forEach(([round,pk])=>{
+        const g=brk.find(x=>pairOf(x)===pk);
+        let cell=`<span style="color:var(--muted)">${esc(pk.split('|').join(' v '))}</span>`;
+        if(g&&g.finished){ const d0=deriveState(g.plays,g.settings);
+          const w=d0.home>d0.away?g.teams.home.name:(d0.away>d0.home?g.teams.away.name:null);
+          const bh=w===g.teams.home.name, ba=w===g.teams.away.name;
+          cell=`<b${bh?' style="color:var(--amber)"':''}>${esc(g.teams.home.name)}</b> <span class="num">${d0.home}–${d0.away}</span> <b${ba?' style="color:var(--amber)"':''}>${esc(g.teams.away.name)}</b>`;
+          if(round==='Final'&&w) champ=w;
+        }
+        t+=`<tr><td style="white-space:nowrap">${round}</td><td style="text-align:left">${cell}</td></tr>`;
+      });
+      t+=`</tbody></table>`;
+      bc.appendChild(h(t));
+      if(champ) bc.appendChild(h(`<div style="text-align:center;margin-top:10px;font-weight:800;font-size:15px">🏆 ${esc(champ)} — Nations Cup Champions 2026</div>`));
+      root.appendChild(bc);
+    }
   }
 
   // aggregate by team name + jersey
