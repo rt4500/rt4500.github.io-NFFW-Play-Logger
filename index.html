@@ -831,7 +831,26 @@ function applyPresets(pr){
   db.roster = (pr.roster||[]).map(p=>({...p}));
   db.lists = Object.assign({}, db.lists, JSON.parse(JSON.stringify(pr.lists||{})));
   if(!Array.isArray(db.lists.favorites)) db.lists.favorites=[];
+  applyRenames(pr.rename);
+  if(pr.stamp) db._presetStamp = pr.stamp;
   save();
+}
+/* A player's name or a play's name changed in the team file (e.g. a full
+   name added). Rewrite games already on this device so stats stay in one
+   line per player / play instead of splitting at the change. The map lives
+   in the encrypted team file only. Shape: {players:{old:new}, plays:{old:new}} */
+function applyRenames(rn){
+  if(!rn) return 0;
+  const pl=rn.players||{}, py=rn.plays||{};
+  db.rename = { players:Object.assign({}, (db.rename||{}).players, pl), plays:Object.assign({}, (db.rename||{}).plays, py) };
+  let n=0;
+  const fix=(p,k,m)=>{ const v=p[k]; if(typeof v==='string' && v && Object.prototype.hasOwnProperty.call(m,v) && m[v]!==v){ p[k]=m[v]; n++; } };
+  (db.games||[]).forEach(g=>(g.plays||[]).forEach(p=>{
+    fix(p,'PASSER',pl); fix(p,'RECEIVER',pl); fix(p,'OFF PLAY',py);
+  }));
+  if(Array.isArray(db.lists.favorites))
+    db.lists.favorites=[...new Set(db.lists.favorites.map(v=>Object.prototype.hasOwnProperty.call(py,v)?py[v]:v))];
+  return n;
 }
 /* ================= THE VAULT =================
    localStorage is one basket. A renamed site, a cleared cache or a browser
@@ -3606,7 +3625,7 @@ function alignToFilm(filmRows, plays){
           placed:placed, total:ours.length};
 }
 function buildMerged(filmCols, filmRows, align, team){
-  const filmOwn=['DN','DEF FRONT','BLITZ','COVERAGE','D-AUDIBLE 1','D-AUDIBLE 2','LINE TO GAIN','XP'];
+  const filmOwn=['DN','DIST','DEF FRONT','BLITZ','COVERAGE','D-AUDIBLE 1','D-AUDIBLE 2','LINE TO GAIN','XP'];
   const extra=filmCols.filter(c=>!COLS.includes(c));
   const out=COLS.slice();
   extra.forEach(c=>{ if(!out.includes(c)) out.splice(out.indexOf('TEAM')+1, 0, c); });
@@ -4073,7 +4092,7 @@ $('teamFilePick').addEventListener('change',e=>{
 
 /* ---- team-file generation (master copy) ---- */
 function currentPresets(){
-  return { roster:(db.roster||[]).map(p=>({...p})), lists:{
+  return { stamp:new Date().toISOString().slice(0,16), rename:db.rename||{}, roster:(db.roster||[]).map(p=>({...p})), lists:{
     forms:db.lists.forms||[], plays:db.lists.plays||[], fronts:db.lists.fronts||[], blitzes:db.lists.blitzes||[],
     coverages:db.lists.coverages||[], audibles:db.lists.audibles||[], oppForms:db.lists.oppForms||[], oppPlays:db.lists.oppPlays||[]
   }};
@@ -4143,6 +4162,8 @@ async function tryVaultRecovery(){
   applyTheme();
   renderLockStatus();
   if(!SHARE_OK) document.querySelectorAll('[data-share]').forEach(b=>b.style.display='none');
+  // master copy opened again after its built-in presets were updated: take the new ones
+  if(hadSavedData && PRESET_PLAIN && PRESET_PLAIN.stamp && db._presetStamp!==PRESET_PLAIN.stamp) applyPresets(PRESET_PLAIN);
   if(hadSavedData){ bootApp(); vaultSync(false); return; }  // returning device — data already stored locally
   if(PRESET_PLAIN){                                         // master copy with data built in
     applyPresets(PRESET_PLAIN); bootApp();
